@@ -1,10 +1,10 @@
 pytest>=8
-pydantic>=2.13
-requests>=2.34
-psycopg2-binary>=2.9
-openpyxl>=3.1
-pandas>=3.0
-pytest-check>=2.9
 allure-pytest>=2.16
+requests>=2.34
+pydantic>=2.13
+psycopg2-binary>=2.9
+pandas>=3.0
+openpyxl>=3.1
 pytest-playwright
+python-dotenv>=1.0
 hvac>=2.0

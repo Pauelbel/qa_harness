@@ -1,7 +1,0 @@
-# Только настройки инструментов. Зависимости: requirements.txt.
-
-[tool.pytest.ini_options]
-addopts = "-ra --strict-markers"
-pythonpath = ["."]
-testpaths = ["tests", "examples"]
-python_files = ["test_*.py"]

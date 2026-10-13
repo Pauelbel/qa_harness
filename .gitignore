@@ -6,3 +6,6 @@ test-artifacts/
 allure-results/
 allure-report/
 logs/
+
+# Скачанные DQ-отчёты: в них реальные данные
+**/dq_reports/reports/

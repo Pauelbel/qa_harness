@@ -1,149 +1,100 @@
-"""Подключение плагинов и демо-сервер для примеров.
+"""Клиенты систем и тестовые данные: тест просит их по имени фикстуры.
 
-Примеры работают без внешних систем: сервер поднимается в тестах сам.
-Запуск из корня репозитория:  python -m pytest examples
+    def test_orders(app_api, app_db, created_project): ...
+
+Новая система — фикстура «<система>_<клиент>» по образцу app_api: адрес и секреты
+из ACTIVE_CONFIG, клиент из clients/. Один клиент на весь запуск; секреты читаются,
+только когда клиент понадобился тесту.
 """
 
-import json
-import logging
-from collections.abc import Callable, Iterator
-from html import escape
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from itertools import count
-from threading import Lock, Thread
-from uuid import uuid4
+import uuid
+from collections.abc import Iterator
 
+import allure
 import pytest
 
-from qa_core.clients.http import BaseHttpClient
-
-logger = logging.getLogger(__name__)
-
-# Так проект подключает плагины ядра. Не нужен плагин: удалите строку.
-# Нужен Allure: добавьте "qa_core.pytest_plugins.allure_reporting" (и pip install allure-pytest).
-pytest_plugins = [
-    "qa_core.pytest_plugins.fixtures",    # маркеры и фикстура http_client
-    "qa_core.pytest_plugins.logging",     # логи в консоль и в logs/
-    "qa_core.pytest_plugins.playwright",  # фикстура browser_page
-]
-
-ITEMS = [
-    {"Id": 1, "Title": "Первый заказ", "Status": "Draft"},
-    {"Id": 2, "Title": "Второй заказ", "Status": "Draft"},
-]
-
-# Заказы демо-сервиса лежат в памяти: так видно создание и удаление данных.
-ORDERS: dict[int, str] = {}
-ORDERS_LOCK = Lock()
-_next_order_id = count(1)
-
-ORDERS_PAGE = """<!doctype html><html lang="ru"><head><title>Заказы</title></head><body>
-<h1>Заказы</h1>
-<ul>{rows}</ul></body></html>"""
+from clients.db import PostgresClient
+from clients.http import HttpClient
+from clients.odata import OdataClient
+from config import ACTIVE_CONFIG
 
 
-class DemoHandler(BaseHTTPRequestHandler):
-    """Демо-сервис: список позиций, API заказов и страница заказов."""
+# ============================================================================
+# Клиенты систем
+# ============================================================================
 
-    def do_GET(self) -> None:
-        if self.path == "/api/orders":
-            with ORDERS_LOCK:
-                orders = [{"id": key, "title": title} for key, title in ORDERS.items()]
-            self._send(200, json.dumps({"value": orders}).encode("utf-8"), "application/json")
-        elif self.path == "/orders":
-            with ORDERS_LOCK:
-                rows = "".join(f"<li>{escape(title)}</li>" for title in ORDERS.values())
-            self._send(200, ORDERS_PAGE.format(rows=rows).encode("utf-8"), "text/html; charset=utf-8")
-        elif self.path.startswith("/api/items"):
-            self._send(200, json.dumps({"value": ITEMS}).encode("utf-8"), "application/json")
-        else:
-            self._send(404, b"not found", "text/plain")
-
-    def do_POST(self) -> None:
-        raw_body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
-        if self.path != "/api/orders":
-            self._send(404, b"not found", "text/plain")
-            return
-        title = json.loads(raw_body)["title"]
-        with ORDERS_LOCK:
-            order_id = next(_next_order_id)
-            ORDERS[order_id] = title
-        body = json.dumps({"id": order_id, "title": title}).encode("utf-8")
-        self._send(201, body, "application/json")
-
-    def do_DELETE(self) -> None:
-        prefix = "/api/orders/"
-        order_id = int(self.path[len(prefix):]) if self.path.startswith(prefix) else None
-        with ORDERS_LOCK:
-            removed = ORDERS.pop(order_id, None) if order_id is not None else None
-        if removed is None:
-            self._send(404, b"not found", "text/plain")
-        else:
-            self._send(204, b"", "text/plain")
-
-    def _send(self, status: int, body: bytes, content_type: str) -> None:
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def log_message(self, format, *args) -> None:  # noqa: A002 - тишина в консоли
-        pass
+@pytest.fixture(scope="session")
+def app_api() -> Iterator[OdataClient]:
+    """OData API бэкенда тестируемого приложения."""
+    headers = {"Authorization": f"Bearer {ACTIVE_CONFIG['app_api_token']}", "Accept": "application/json"}
+    with OdataClient(ACTIVE_CONFIG["app_api_url"], headers=headers) as client:
+        yield client
 
 
 @pytest.fixture(scope="session")
-def demo_url() -> Iterator[str]:
-    """Адрес локального демо-сервера, он живёт на время всех примеров."""
-    server = ThreadingHTTPServer(("127.0.0.1", 0), DemoHandler)
-    Thread(target=server.serve_forever, daemon=True).start()
-    yield f"http://127.0.0.1:{server.server_address[1]}"
-    server.shutdown()
-    server.server_close()
+def app_db() -> PostgresClient:
+    """База данных тестируемого приложения."""
+    return PostgresClient(
+        host=ACTIVE_CONFIG["app_db_host"],
+        port=ACTIVE_CONFIG["app_db_port"],
+        dbname=ACTIVE_CONFIG["app_db_name"],
+        user=ACTIVE_CONFIG["app_db_user"],
+        password=ACTIVE_CONFIG["app_db_password"],
+    )
 
 
-# --- Общие предусловия -------------------------------------------------------
-# Заказ нужен и API-, и UI-тестам, поэтому фикстуры лежат здесь. Если он нужен
-# одному файлу, фикстуру стоит описать в самом файле.
-
-ORDER_PREFIX = "autotest-"
-
-
-def create_order(base_url: str) -> dict:
-    """Создаёт заказ через API и возвращает его данные."""
-    title = f"{ORDER_PREFIX}{uuid4().hex[:8]}"
-    with BaseHttpClient() as http:
-        response = http.post(f"{base_url}/api/orders", json={"title": title})
-    response.raise_for_status()
-    return response.json()
+@pytest.fixture(scope="session")
+def crm_api() -> Iterator[HttpClient]:
+    """REST API второй системы: токен в заголовке, тестовый HTTPS-сертификат."""
+    headers = {"Authorization": ACTIVE_CONFIG["crm_token"]}
+    with HttpClient(ACTIVE_CONFIG["crm_url"], headers=headers, verify=False) as client:
+        yield client
 
 
-def delete_order(base_url: str, order_id: int) -> None:
-    """Удаляет заказ. Ошибка очистки пишется в лог и не скрывает падение теста."""
-    try:
-        with BaseHttpClient() as http:
-            http.delete(f"{base_url}/api/orders/{order_id}").raise_for_status()
-    except Exception:
-        logger.exception("Не удалось удалить тестовый заказ %s", order_id)
+# ============================================================================
+# Тестовые данные
+#   фикстура создаёт запись до теста и удаляет после — даже если тест упал
+#   (код после yield pytest выполняет всегда)
+# ============================================================================
+
+def unique_title() -> str:
+    """Название тестовых данных: qa_autotest- видно в БД, хвост не пересекается с другими запусками."""
+    return f"qa_autotest-{uuid.uuid4().hex[:8]}"
 
 
 @pytest.fixture
-def order(demo_url: str) -> Iterator[dict]:
-    """Один заказ: создаётся до теста, удаляется после него."""
-    created = create_order(demo_url)
-    yield created
-    delete_order(demo_url, created["id"])
+def created_project(app_db) -> Iterator[dict]:
+    """Проект в БД на время теста: ``{"id": ..., "title": ...}``."""
+    project = {"id": str(uuid.uuid4()), "title": unique_title()}
+
+    with allure.step(f"Предусловие: создать в БД проект «{project['title']}»"):
+        app_db.execute(
+            "INSERT INTO projects (id, title, status) VALUES (%s, %s, 'draft')",
+            [project["id"], project["title"]],
+        )
+
+    yield project
+
+    with allure.step(f"Постусловие: удалить из БД проект «{project['title']}»"):
+        app_db.execute("DELETE FROM projects WHERE id = %s", [project["id"]])
 
 
 @pytest.fixture
-def order_factory(demo_url: str) -> Iterator[Callable[[], dict]]:
-    """Фабрика для тестов, которым нужно несколько заказов. Удаляет всё созданное."""
-    created: list[dict] = []
+def created_order(app_db, created_project) -> Iterator[dict]:
+    """Заказ в проекте на время теста: ``{"id": ..., "title": ..., "project": {...}}``.
 
-    def make() -> dict:
-        created.append(create_order(demo_url))
-        return created[-1]
+    Фикстура просит created_project: pytest создаёт сначала проект, потом заказ,
+    а удаляет в обратном порядке.
+    """
+    order = {"id": str(uuid.uuid4()), "title": unique_title(), "project": created_project}
 
-    yield make
-    for item in created:
-        delete_order(demo_url, item["id"])
+    with allure.step(f"Предусловие: создать в БД заказ «{order['title']}»"):
+        app_db.execute(
+            "INSERT INTO orders (id, title, project_id, status) VALUES (%s, %s, %s, 'draft')",
+            [order["id"], order["title"], created_project["id"]],
+        )
+
+    yield order
+
+    with allure.step(f"Постусловие: удалить из БД заказ «{order['title']}»"):
+        app_db.execute("DELETE FROM orders WHERE id = %s", [order["id"]])

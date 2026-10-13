@@ -1,22 +1,84 @@
-"""Настройки проекта. Файл необязателен: пропущенное берётся из значений по умолчанию.
+"""Окружение и секреты.
 
-Секция — словарь с именем в верхнем регистре. Опечатка в ключе даёт ошибку.
-Секреты (пароли, токены) сюда не пишут: они берутся из переменных окружения или Vault.
+Окружение — ``TEST_ENV``: dev, stage (по умолчанию) или prod.
+Источник секретов — ``SECRETS_SOURCE``:
+    env    — переменные окружения с префиксом окружения: ``STAGE_APP_API_TOKEN``;
+    vault  — ключ без префикса (``APP_API_TOKEN``) из секрета ``VAULT_PATH``;
+             ``{env}`` в пути заменяется на окружение: ``myapp/{env}``.
+
+Значения читаются при первом обращении, поэтому в окружении нужны только ключи систем,
+с которыми работают запущенные тесты. Список переменных — в .env.example.
+
+    ACTIVE_CONFIG["app_api_token"]
 """
 
-HTTP = {
-    # Секунды ожидания ответа, если в вызове не указан свой timeout.
-    "timeout": 30,
-    # Сколько символов тела ответа писать в лог (сам response не обрезается).
-    "max_logged_response_body_length": 2000,
-    # Параметры адреса, значения которых заменяются на *** в логах (без учёта регистра).
-    "sensitive_query_parameters": ["token", "access_token", "api_key", "key", "password"],
-}
+from __future__ import annotations
 
-BROWSER = {
-    "engine": "chromium",  # chromium, firefox или webkit
-    "headless": True,      # False — показывать окно браузера
-    "width": 1920,
-    "height": 1080,
-    "ignore_https_errors": True,  # допускает тестовые HTTPS-сертификаты
-}
+import os
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    pass
+else:
+    load_dotenv()
+
+
+CURRENT_ENV = os.getenv("TEST_ENV", "stage").lower()
+if CURRENT_ENV not in {"dev", "stage", "prod"}:
+    raise ValueError(f"TEST_ENV должен быть dev, stage или prod. Получено: {CURRENT_ENV}")
+
+
+class Settings:
+    """Секреты окружения: ``settings["app_api_token"]``; секрет Vault читается один раз."""
+
+    def __init__(self, env: str) -> None:
+        self.env = env
+        self.source = os.getenv("SECRETS_SOURCE", "env").lower()
+        if self.source not in {"env", "vault"}:
+            raise ValueError("SECRETS_SOURCE должен быть 'env' или 'vault'")
+        self._vault: dict | None = None
+
+    def __getitem__(self, name: str) -> str:
+        key = name.upper()
+        if self.source == "env":
+            env_key = f"{self.env.upper()}_{key}"
+            value = os.getenv(env_key)
+            if not value:
+                raise KeyError(f"Не задана переменная окружения {env_key}")
+            return value
+
+        if self._vault is None:
+            self._vault = _read_vault(self.env)
+        value = self._vault.get(key)
+        if value in (None, ""):
+            raise KeyError(f"В Vault нет ключа {key}")
+        return str(value)
+
+
+def _read_vault(env: str) -> dict:
+    """Читает KV-секрет Vault по токену или AppRole."""
+    import hvac
+
+    path = os.environ["VAULT_PATH"].replace("{env}", env)
+    mount = os.environ["VAULT_MOUNT"]
+    token = os.getenv("VAULT_TOKEN")
+    verify = os.getenv("VAULT_CACERT") or os.getenv("VAULT_VERIFY", "true").lower() == "true"
+
+    approle = None if token else (os.environ["VAULT_ROLE_ID"], os.environ["VAULT_SECRET_ID"])
+
+    client = hvac.Client(url=os.environ["VAULT_ADDR"], token=token, verify=verify)
+    try:
+        if approle:
+            client.auth.approle.login(role_id=approle[0], secret_id=approle[1])
+        if os.getenv("VAULT_KV_VERSION", "2") == "1":
+            return client.secrets.kv.v1.read_secret(path=path, mount_point=mount)["data"]
+        return client.secrets.kv.v2.read_secret_version(
+            path=path, mount_point=mount, raise_on_deleted_version=True
+        )["data"]["data"]
+    except Exception as exc:
+        # Ответ Vault может содержать секреты, поэтому показываем только тип ошибки.
+        raise RuntimeError(f"Не удалось прочитать секрет Vault ({type(exc).__name__})") from None
+
+
+ACTIVE_CONFIG = Settings(CURRENT_ENV)
