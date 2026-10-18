@@ -1,0 +1,5 @@
+# Разработка самого harness: все профили (тесты tests/ проверяют каждый слой)
+-r db.txt
+-r ui.txt
+-r dq.txt
+-r vault.txt

@@ -2,10 +2,7 @@ __pycache__/
 .pytest_cache/
 .venv/
 .env
-test-artifacts/
-allure-results/
+# Артефакты запусков: artifacts/<дата-время>_<окружение>/ — лог, allure-results, скриншоты,
+# trace, DQ-отчёты (в них реальные данные). Удалить все: rm -rf artifacts
+artifacts/
 allure-report/
-logs/
-
-# Скачанные DQ-отчёты: в них реальные данные
-**/dq_reports/reports/

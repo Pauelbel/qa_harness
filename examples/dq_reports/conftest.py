@@ -4,7 +4,7 @@
 
 Переменные окружения:
     KEEP_DQ_REPORTS=false   — удалить отчёт после тестов (по умолчанию отчёты остаются)
-    DQ_REPORTS_OUTPUT_DIR   — куда сохранять отчёты (по умолчанию examples/dq_reports/reports)
+    DQ_REPORTS_OUTPUT_DIR   — куда сохранять отчёты (по умолчанию RUN_DIR/dq_reports)
 """
 
 import os
@@ -15,11 +15,12 @@ import pandas as pd
 import pytest
 
 from checks.excel import ExcelChecker, read_excel
+from config import RUN_DIR
 
 REPORT_URL = "/api/v1/reports/generate"
 REPORT_TIMEOUT = 300  # секунд: формирование отчёта на бэкенде бывает долгим
 KEEP_REPORTS = os.getenv("KEEP_DQ_REPORTS", "true").lower() in ("true", "1", "yes")
-OUTPUT_DIR = Path(os.getenv("DQ_REPORTS_OUTPUT_DIR") or Path(__file__).parent / "reports")
+OUTPUT_DIR = Path(os.getenv("DQ_REPORTS_OUTPUT_DIR") or RUN_DIR / "dq_reports")
 
 
 @pytest.fixture(scope="module")
@@ -42,6 +43,6 @@ def dq_report(request, tmp_path_factory, app_api) -> Iterator[tuple[Path, str | 
 
 @pytest.fixture
 def checker(dq_report) -> ExcelChecker:
-    """Новый checker на каждый тест: ошибки одного теста не попадают в другой."""
+    """Новый checker на каждый тест: ошибки одного теста не попадают в другой. В тесте — ``with checker:``."""
     path, filename, df = dq_report
     return ExcelChecker(df, name=path.name, filename=filename)

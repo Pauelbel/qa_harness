@@ -1,20 +1,10 @@
-"""Окружение и секреты.
-
-Окружение — ``TEST_ENV``: dev, stage (по умолчанию) или prod.
-Источник секретов — ``SECRETS_SOURCE``:
-    env    — переменные окружения с префиксом окружения: ``STAGE_APP_API_TOKEN``;
-    vault  — ключ без префикса (``APP_API_TOKEN``) из секрета ``VAULT_PATH``;
-             ``{env}`` в пути заменяется на окружение: ``myapp/{env}``.
-
-Значения читаются при первом обращении, поэтому в окружении нужны только ключи систем,
-с которыми работают запущенные тесты. Список переменных — в .env.example.
-
-    ACTIVE_CONFIG["app_api_token"]
-"""
+"""Настройки запуска тестов: окружение, секреты, папка результатов."""
 
 from __future__ import annotations
 
 import os
+from datetime import datetime
+from pathlib import Path
 
 try:
     from dotenv import load_dotenv
@@ -24,13 +14,28 @@ else:
     load_dotenv()
 
 
+# Окружение для тестов: dev, stage или prod. Задайте в TEST_ENV. По умолчанию stage.
 CURRENT_ENV = os.getenv("TEST_ENV", "stage").lower()
 if CURRENT_ENV not in {"dev", "stage", "prod"}:
     raise ValueError(f"TEST_ENV должен быть dev, stage или prod. Получено: {CURRENT_ENV}")
 
+# Результаты запуска: лог, отчёт Allure, скриншоты, скачанные отчёты.
+# Каждый запуск пишет в свою папку: artifacts/дата-время_окружение.
+ROOT_DIR = Path(__file__).resolve().parent
+ARTIFACTS_DIR = Path(os.getenv("ARTIFACTS_DIR") or ROOT_DIR / "artifacts")
+RUN_DIR = ARTIFACTS_DIR / f"{datetime.now():%Y%m%d-%H%M%S}_{CURRENT_ENV}"
+
 
 class Settings:
-    """Секреты окружения: ``settings["app_api_token"]``; секрет Vault читается один раз."""
+    """Секреты: адреса, токены, пароли.
+
+    Тест получает секрет так: ACTIVE_CONFIG["app_api_token"].
+    Источник секретов задайте в SECRETS_SOURCE:
+        env   - переменные окружения с префиксом окружения, например STAGE_APP_API_TOKEN.
+        vault - хранилище Vault. Имя ключа без префикса, например APP_API_TOKEN.
+    Программа читает секрет только тогда, когда тесту он нужен.
+    Полный список переменных есть в файле .env.example.
+    """
 
     def __init__(self, env: str) -> None:
         self.env = env
@@ -57,7 +62,11 @@ class Settings:
 
 
 def _read_vault(env: str) -> dict:
-    """Читает KV-секрет Vault по токену или AppRole."""
+    """Читает секреты окружения из Vault.
+
+    Адрес и путь: VAULT_ADDR, VAULT_MOUNT, VAULT_PATH. Слово {env} в пути заменяется на окружение.
+    Вход: VAULT_TOKEN или пара VAULT_ROLE_ID и VAULT_SECRET_ID.
+    """
     import hvac
 
     path = os.environ["VAULT_PATH"].replace("{env}", env)

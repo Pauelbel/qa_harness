@@ -1,12 +1,13 @@
 """Проверки качества данных Excel-отчёта.
 
-    checker = ExcelChecker(read_excel("report.xlsx"), name="report.xlsx")
-    checker.check_date("Дата")
-    checker.check_enum("Статус", ("Да", "Нет"))
-    checker.assert_valid()
+    with ExcelChecker(read_excel("report.xlsx"), name="report.xlsx") as checker:
+        checker.check_date("Дата")
+        checker.check_enum("Статус", ("Да", "Нет"))
 
-Ошибка — одна на правило: сколько строк его нарушают, номера строк и примеры значений.
+Ошибка — одна на правило: сколько строк из скольких его нарушают, номера строк и примеры значений.
 Пустые ячейки проверки значений пропускают; заполненность проверяет ``check_required``.
+Числовые проверки (целое, знаки после запятой, диапазон, расчёт стоимости) сами считают
+ошибкой заполненную ячейку, которая не является числом: ``check_is_numeric`` перед ними не нужен.
 """
 
 from __future__ import annotations
@@ -16,28 +17,36 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
-import allure
 import pandas as pd
 
 from checks.base import Checker
+from report import step
 
 MAX_EXAMPLES = 3  # сколько номеров строк и значений показать в ошибке
 
 
 def read_excel(path: str | Path) -> pd.DataFrame:
-    """Читает xlsx: обрезает пробелы, пустые ячейки → ``pd.NA``.
+    """Читает xlsx: обрезает пробелы у текста, пустые ячейки → ``pd.NA``.
 
+    Типы ячеек сохраняются: в смешанной колонке число 123 остаётся числом, а не текстом "123".
     Текст "None", "nan", "NA" остаётся значением, а не пропуском.
     """
     df = pd.read_excel(path, engine="openpyxl", keep_default_na=False, na_values=[""])
     df.columns = [str(c).strip() for c in df.columns]
     for col in df.columns:
         if _is_text(df[col]):
-            text = df[col].astype(str).str.strip()
-            df[col] = text.mask(df[col].isna() | (text == ""), pd.NA)
+            df[col] = df[col].map(_clean_cell).astype(object)
         else:
             df[col] = df[col].replace(float("nan"), pd.NA)
     return df
+
+
+def _clean_cell(value: Any) -> Any:
+    """Текст — без пробелов по краям, пустой текст и NaN — ``pd.NA``, остальные типы как есть."""
+    if isinstance(value, str):
+        value = value.strip()
+        return value if value else pd.NA
+    return pd.NA if _is_na(value) else value
 
 
 class ExcelChecker(Checker):
@@ -48,7 +57,7 @@ class ExcelChecker(Checker):
 
     # --- структура ------------------------------------------------------
 
-    @allure.step("Структура: состав и порядок колонок")
+    @step("Структура: состав и порядок колонок")
     def check_columns(self, expected: Sequence[str], strict_order: bool = False) -> ExcelChecker:
         """Все ожидаемые колонки на месте, лишних нет; при ``strict_order`` — и порядок совпадает."""
         actual = list(self.df.columns)
@@ -62,7 +71,7 @@ class ExcelChecker(Checker):
             self.fail("Структура: порядок столбцов не совпадает с ожидаемым")
         return self
 
-    @allure.step("Имя файла соответствует шаблону")
+    @step("Имя файла соответствует шаблону")
     def check_filename(self, pattern: str) -> ExcelChecker:
         """Имя файла от сервера (Content-Disposition) соответствует регулярному выражению."""
         if self.filename is None:
@@ -71,7 +80,7 @@ class ExcelChecker(Checker):
             self.fail(f"Имя файла: «{self.filename}» не соответствует шаблону «{pattern}»")
         return self
 
-    @allure.step("Нет полностью пустых колонок")
+    @step("Нет полностью пустых колонок")
     def check_no_fully_empty_columns(self, columns: Sequence[str] | None = None) -> ExcelChecker:
         """Ни одна колонка не пуста целиком."""
         if self.df.empty:
@@ -81,7 +90,7 @@ class ExcelChecker(Checker):
                 self.fail(f'"{col}" → колонка полностью пуста: 0% заполненности')
         return self
 
-    @allure.step("Нет дубликатов строк")
+    @step("Нет дубликатов строк")
     def check_no_duplicate_rows(
         self, columns: Sequence[str] | None = None, message: str = "полный дубликат строки"
     ) -> ExcelChecker:
@@ -94,7 +103,7 @@ class ExcelChecker(Checker):
             self.fail(f"Правило: {message}. Дубликатов: {len(rows)}. Строки: {_rows_text(rows)}")
         return self
 
-    @allure.step("Статистика заполненности колонок")
+    @step("Статистика заполненности колонок")
     def get_fill_statistics(self, columns: Sequence[str] | None = None) -> pd.DataFrame:
         """Таблица заполненности колонок; ошибок не создаёт."""
         total = len(self.df)
@@ -111,7 +120,7 @@ class ExcelChecker(Checker):
 
     # --- значения -------------------------------------------------------
 
-    @allure.step("Обязательные колонки заполнены")
+    @step("Обязательные колонки заполнены")
     def check_required(self, columns: Sequence[str]) -> ExcelChecker:
         """Колонки заполнены во всех строках."""
         for col in columns:
@@ -119,14 +128,14 @@ class ExcelChecker(Checker):
                 self._add(self._empty(col), col, "обязательное поле должно быть заполнено")
         return self
 
-    @allure.step("{column}: текст")
+    @step("{column}: текст")
     def check_text(self, column: str) -> ExcelChecker:
         if not self._missing(column):
             is_text = self.df[column].map(lambda value: isinstance(value, str))
             self._add(~self._empty(column) & ~is_text, column, "должно быть текстовым значением")
         return self
 
-    @allure.step("{column}: {description}")
+    @step("{column}: {description}")
     def check_regex(self, column: str, pattern: str, description: str) -> ExcelChecker:
         """Значение целиком соответствует ``pattern``; ``description`` попадает в текст ошибки."""
         if not self._missing(column):
@@ -134,7 +143,7 @@ class ExcelChecker(Checker):
             self._add(~self._empty(column) & ~matches, column, description)
         return self
 
-    @allure.step("{column}: значение из допустимого списка")
+    @step("{column}: значение из допустимого списка")
     def check_enum(self, column: str, allowed: Iterable[str]) -> ExcelChecker:
         if not self._missing(column):
             allowed = list(allowed)
@@ -142,14 +151,14 @@ class ExcelChecker(Checker):
             self._add(bad, column, f"значение должно входить в допустимый список: {allowed}")
         return self
 
-    @allure.step("{column}: дата в формате {fmt}")
+    @step("{column}: дата в формате {fmt}")
     def check_date(self, column: str, fmt: str = "%d.%m.%Y") -> ExcelChecker:
         if not self._missing(column):
             parsed = pd.to_datetime(self.df[column], format=fmt, errors="coerce")
             self._add(self.df[column].notna() & parsed.isna(), column, f"дата должна соответствовать формату {fmt}")
         return self
 
-    @allure.step("{column}: период из двух дат")
+    @step("{column}: период из двух дат")
     def check_date_period(self, column: str, fmt: str = "%d.%m.%Y") -> ExcelChecker:
         """Период вида ``01.01.2026 - 31.01.2026``: две корректные даты через дефис."""
         if not self._missing(column):
@@ -160,28 +169,29 @@ class ExcelChecker(Checker):
             self._add(bad, column, f"должно содержать две корректные даты формата {fmt}, разделённые дефисом")
         return self
 
-    @allure.step("{column}: число")
+    @step("{column}: число")
     def check_is_numeric(self, column: str) -> ExcelChecker:
+        """Заполненные ячейки — числа (или текст, который читается как число: "12.5")."""
         if not self._missing(column):
-            self._add(~self._empty(column) & self._numeric(column).isna(), column, "значение должно быть числом")
+            self._numbers(column)
         return self
 
-    @allure.step("{column}: целое число")
+    @step("{column}: целое число")
     def check_integer(self, column: str) -> ExcelChecker:
         if not self._missing(column):
-            numeric = self._numeric(column)
+            numeric = self._numbers(column)
             self._add(numeric.notna() & (numeric != numeric.round()), column, "должно быть целым числом")
         return self
 
-    @allure.step("{column}: не более {max_decimal_places} знаков после запятой")
+    @step("{column}: не более {max_decimal_places} знаков после запятой")
     def check_decimal_places(self, column: str, max_decimal_places: int) -> ExcelChecker:
         if not self._missing(column):
-            numeric = self._numeric(column)
+            numeric = self._numbers(column)
             bad = numeric.notna() & ((numeric - numeric.round(max_decimal_places)).abs() > 1e-9)
             self._add(bad, column, f"число должно содержать не более {max_decimal_places} знаков после запятой")
         return self
 
-    @allure.step("{column}: число в допустимом диапазоне")
+    @step("{column}: число в допустимом диапазоне")
     def check_range(
         self,
         column: str,
@@ -192,17 +202,17 @@ class ExcelChecker(Checker):
     ) -> ExcelChecker:
         """Число в границах; ``min_inclusive=False`` — строго больше ``min_value``.
 
-        Нечисловые значения пропускаются: их ловит ``check_is_numeric``.
+        Заполненная ячейка, которая не является числом, — тоже ошибка.
         """
         if min_value is None and max_value is None:
             raise ValueError("Для проверки диапазона нужна хотя бы одна граница")
         if not self._missing(column):
-            numeric = self._numeric(column)
+            numeric = self._numbers(column)
             valid, rule = _in_range(numeric, min_value, min_inclusive, max_value, max_inclusive)
             self._add(numeric.notna() & ~valid, column, rule)
         return self
 
-    @allure.step("{column}: процент")
+    @step("{column}: процент")
     def check_percentage(
         self,
         column: str,
@@ -228,14 +238,17 @@ class ExcelChecker(Checker):
         )
         return self
 
-    @allure.step("{cost_col} = {hours_col} × {rate_col}")
+    @step("{cost_col} = {hours_col} × {rate_col}")
     def check_cost_calculation(
         self, hours_col: str, rate_col: str, cost_col: str, tolerance: float = 0.01
     ) -> ExcelChecker:
-        """Стоимость = часы × ставка (округлено до копеек) с погрешностью ``tolerance``."""
+        """Стоимость = часы × ставка (округлено до копеек) с погрешностью ``tolerance``.
+
+        Заполненная ячейка любой из трёх колонок, которая не является числом, — тоже ошибка.
+        """
         if self._missing(hours_col, rate_col, cost_col):
             return self
-        hours, rate, cost = self._numeric(hours_col), self._numeric(rate_col), self._numeric(cost_col)
+        hours, rate, cost = self._numbers(hours_col), self._numbers(rate_col), self._numbers(cost_col)
         bad = hours.notna() & rate.notna() & cost.notna() & ((cost - (hours * rate).round(2)).abs() > tolerance)
         self._add(
             bad,
@@ -254,7 +267,7 @@ class ExcelChecker(Checker):
         rows = [index + 2 for index in bad]  # строка в Excel: заголовок — 1, данные — с 2
         examples = "; ".join(f"строка {index + 2}: {_show(self.df.at[index, column])}" for index in bad[:MAX_EXAMPLES])
         self.fail(
-            f'"{column}" → Правило: {rule}. Ошибок: {len(rows)}. Строки: {_rows_text(rows)}\n'
+            f'"{column}" → Правило: {rule}. Ошибок: {len(rows)} из {len(self.df)}. Строки: {_rows_text(rows)}\n'
             f"Примеры значений: {examples}"
         )
 
@@ -272,7 +285,22 @@ class ExcelChecker(Checker):
         return series.isna()
 
     def _numeric(self, column: str) -> pd.Series:
-        return pd.to_numeric(self.df[column], errors="coerce")
+        """Числа колонки; не число (и True/False) — ``NaN``."""
+        values = self.df[column].map(lambda value: pd.NA if isinstance(value, bool) else value)
+        return pd.to_numeric(values, errors="coerce").astype(float)
+
+    def _numbers(self, column: str) -> pd.Series:
+        """Числа колонки; заполненные ячейки, которые не являются числом, — ошибка правила."""
+        numeric = self._numeric(column)
+        self._add(~self._empty(column) & numeric.isna(), column, "значение должно быть числом")
+        return numeric
+
+
+def _is_na(value: Any) -> bool:
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):  # списки и прочие не-скаляры
+        return False
 
 
 def _is_text(series: pd.Series) -> bool:
@@ -305,7 +333,7 @@ def _rows_text(rows: list[int]) -> str:
 
 def _show(value: Any, max_length: int = 120) -> str:
     """Короткое представление значения ячейки для сообщения об ошибке."""
-    if pd.isna(value):
+    if _is_na(value):
         return "<пусто>"
     text = str(value).replace("\n", " ").replace("\r", " ")
     return f"«{text[:max_length]}…»" if len(text) > max_length else f"«{text}»"

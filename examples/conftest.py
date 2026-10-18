@@ -5,18 +5,42 @@
 Новая система — фикстура «<система>_<клиент>» по образцу app_api: адрес и секреты
 из ACTIVE_CONFIG, клиент из clients/. Один клиент на весь запуск; секреты читаются,
 только когда клиент понадобился тесту.
+
+Клиенты необязательных слоёв (БД, браузер, pandas) импортируются внутри фикстур, а папки
+слоёв, чьи зависимости не установлены, не собираются: API-тесты работают с базовым профилем.
 """
 
+import importlib.util
 import uuid
 from collections.abc import Iterator
 
 import allure
 import pytest
 
-from clients.db import PostgresClient
 from clients.http import HttpClient
 from clients.odata import OdataClient
 from config import ACTIVE_CONFIG
+
+
+# ============================================================================
+# Слои без установленных зависимостей не собираются (профили — requirements/)
+# ============================================================================
+
+LAYER_REQUIREMENTS = {  # папка → модуль, без которого её тесты не запустятся
+    "db": "psycopg2",
+    "ui": "pytest_playwright",
+    "dq_reports": "pandas",
+}
+SKIPPED_LAYERS = {
+    folder: module for folder, module in LAYER_REQUIREMENTS.items() if importlib.util.find_spec(module) is None
+}
+collect_ignore = list(SKIPPED_LAYERS)
+
+
+def pytest_report_header(config):
+    if SKIPPED_LAYERS:
+        skipped = ", ".join(f"{folder} (нет {module})" for folder, module in SKIPPED_LAYERS.items())
+        return [f"Не собираются слои без зависимостей: {skipped}"]
 
 
 # ============================================================================
@@ -32,8 +56,10 @@ def app_api() -> Iterator[OdataClient]:
 
 
 @pytest.fixture(scope="session")
-def app_db() -> PostgresClient:
-    """База данных тестируемого приложения."""
+def app_db():
+    """База данных тестируемого приложения (профиль requirements/db.txt)."""
+    from clients.db import PostgresClient
+
     return PostgresClient(
         host=ACTIVE_CONFIG["app_db_host"],
         port=ACTIVE_CONFIG["app_db_port"],

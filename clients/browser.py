@@ -6,10 +6,13 @@
     LOGIN_BTN = "button[type='submit']"
 
     class LoginPage(BasePage):
-        @allure.step("Вход пользователя {username}")
+        @step("Вход пользователя {username}")
         def login_user(self, username, password):
             ...
             self.element("Кнопка «Войти»", LOGIN_BTN).click()
+
+Методы страниц — с декоратором ``@step`` из report.py, а не ``@allure.step``:
+он не сохраняет аргументы (пароль) в файлы отчёта.
 """
 
 from __future__ import annotations

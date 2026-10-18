@@ -32,9 +32,9 @@ class TestOrdersConsistency:
             ORDER BY p.id, o.id
         """)
 
-        checker = Checker()
-        checker.check_no_rows(rows, "Заказы в другом статусе, чем их закрытый проект")
-        checker.assert_valid()
+        with Checker() as checker:
+            checker.check_no_rows(rows, "Заказы в другом статусе, чем их закрытый проект")
+
 
     @allure.title("Внешний идентификатор услуги не повторяется")
     @allure.description("Среди неудалённых услуг каждый external_id встречается один раз.")
@@ -47,9 +47,9 @@ class TestOrdersConsistency:
             HAVING COUNT(*) > 1
         """)
 
-        checker = Checker()
-        checker.check_no_rows(rows, "Повторяющиеся external_id")
-        checker.assert_valid()
+        with Checker() as checker:
+            checker.check_no_rows(rows, "Повторяющиеся external_id")
+
 
     @allure.title("Заказ, созданный тестом, привязан к своему проекту")
     @allure.description("Пример с тестовыми данными: фикстура created_order создаёт проект и заказ и удаляет их после теста.")
@@ -59,7 +59,7 @@ class TestOrdersConsistency:
             [created_order["project"]["id"]],
         )
 
-        checker = Checker()
-        checker.check_equal([row["id"] for row in rows], [created_order["id"]], "Заказы проекта")
-        checker.check_equal(rows[0]["status"] if rows else None, "draft", "Статус нового заказа")
-        checker.assert_valid()
+        with Checker() as checker:
+            checker.check_equal([row["id"] for row in rows], [created_order["id"]], "Заказы проекта")
+            checker.check_equal(rows[0]["status"] if rows else None, "draft", "Статус нового заказа")
+

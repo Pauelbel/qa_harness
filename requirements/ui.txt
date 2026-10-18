@@ -1,0 +1,4 @@
+# UI: браузер (clients/browser.py, examples/ui). Потом: python -m playwright install chromium
+# (Linux без системных библиотек браузера: python -m playwright install --with-deps chromium)
+-r base.txt
+pytest-playwright>=0.7

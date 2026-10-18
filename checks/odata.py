@@ -1,12 +1,14 @@
 """Проверки OData-ответов: $select, $filter, $top, $skip, $count, $expand, $orderby.
 
     items = app_api.get_items("/api/v1/orders", {"$filter": "Status eq 'Draft'"})
-    checker = OdataChecker()
-    checker.check_not_empty(items)
-    checker.check_filter_eq(items, "Status", "Draft")
-    checker.assert_valid()
+    with OdataChecker() as checker:
+        checker.check_not_empty(items)
+        checker.check_filter_eq(items, "Status", "Draft")
 
 Проверки не делают запросов, а работают с уже полученными записями.
+Запись без проверяемого поля — всегда ошибка; ``null`` в поле — обычное значение,
+подходит ли оно, решает правило проверки. Пустой список проверки $filter проходит:
+чтобы фильтр что-то доказывал, создайте подходящую запись и проверьте ``check_has_record``.
 Общие проверки (ответ не пустой, схема) — в checks/base.py.
 """
 
@@ -16,9 +18,8 @@ from collections.abc import Callable
 from datetime import date, datetime
 from typing import Any
 
-import allure
-
 from checks.base import Checker
+from report import step
 
 ODATA_SYSTEM_FIELDS = ("@odata.id", "@odata.etag", "@odata.editLink")
 
@@ -26,39 +27,65 @@ ODATA_SYSTEM_FIELDS = ("@odata.id", "@odata.etag", "@odata.editLink")
 class OdataChecker(Checker):
     # --- $select ---
 
-    @allure.step("$select={field}: есть непустые значения")
+    @step("$select={field}: поле есть в каждой записи")
     def check_select_property(self, items: list[dict], field: str) -> OdataChecker:
-        """Хотя бы у одной записи поле заполнено."""
-        if not any(item.get(field) not in (None, "") for item in items):
-            self.fail(f"$select={field}: ни одного непустого значения")
+        """Выбранное поле присутствует у каждой записи; ``None`` и пустая строка допустимы.
+
+        $select задаёт состав полей, а требования к их значениям проверяются отдельно.
+        Пустой список проходит: если данные обязательны, вызовите ``check_not_empty``.
+        """
+        missing = [index for index, item in enumerate(items) if field not in item]
+        if missing:
+            self.fail(
+                f"$select={field}: поля нет в {len(missing)} из {len(items)} записей; "
+                f"первые индексы (с нуля): {missing[:5]}"
+            )
         return self
 
-    @allure.step("$select: в ответе нет лишних полей")
+    @step("$select: в ответе все выбранные поля без лишних")
     def check_select_strict(self, items: list[dict], fields: list[str]) -> OdataChecker:
-        """В записях только выбранные поля и системные поля OData."""
-        extra = {key for item in items for key in item} - set(fields) - set(ODATA_SYSTEM_FIELDS)
+        """В каждой записи есть все выбранные поля и нет лишних, кроме системных OData.
+
+        Значения выбранных полей (включая ``None`` и пустую строку) не проверяются.
+        """
+        selected = set(fields)
+        missing = [
+            (index, selected - item.keys())
+            for index, item in enumerate(items)
+            if not selected <= item.keys()
+        ]
+        if missing:
+            examples = "; ".join(f"[{index}]: {_field_names_preview(names)}" for index, names in missing[:5])
+            self.fail(
+                f"$select: выбранных полей нет в {len(missing)} из {len(items)} записей; "
+                f"первые индексы (с нуля) и отсутствующие поля: {examples}"
+            )
+        extra = {key for item in items for key in item} - selected - set(ODATA_SYSTEM_FIELDS)
         if extra:
-            self.fail(f"$select: лишние поля {sorted(extra)}, ожидались только {fields}")
+            self.fail(f"$select: лишних полей {len(extra)}; первые имена: {_field_names_preview(extra)}")
         return self
 
     # --- $filter ---
 
-    @allure.step("$filter: {field} eq {expected}")
+    @step("$filter: {field} eq {expected}")
     def check_filter_eq(self, items: list[dict], field: str, expected: Any) -> OdataChecker:
         return self._check_all(items, field, lambda value: value == expected, f"{field} eq {expected!r}")
 
-    @allure.step("$filter: {field} ne {unexpected}")
+    @step("$filter: {field} ne {unexpected}")
     def check_filter_ne(self, items: list[dict], field: str, unexpected: Any) -> OdataChecker:
         return self._check_all(items, field, lambda value: value != unexpected, f"{field} ne {unexpected!r}")
 
-    @allure.step("$filter: {field} содержит {substring}")
+    @step("$filter: {field} содержит {substring}")
     def check_filter_contains(self, items: list[dict], field: str, substring: str) -> OdataChecker:
-        """Строковое поле содержит подстроку (с учётом регистра)."""
+        """Строковое поле содержит подстроку (с учётом регистра); не строка — нарушение."""
         return self._check_all(
-            items, field, lambda value: substring in (value or ""), f"contains({field}, {substring!r})"
+            items,
+            field,
+            lambda value: isinstance(value, str) and substring in value,
+            f"contains({field}, {substring!r})",
         )
 
-    @allure.step("$filter: {field} от {start} до {end}")
+    @step("$filter: {field} от {start} до {end}")
     def check_filter_date_range(
         self, items: list[dict], field: str, start: date | str, end: date | str
     ) -> OdataChecker:
@@ -71,34 +98,59 @@ class OdataChecker(Checker):
 
         return self._check_all(items, field, in_range, f"{field} от {start} до {end}")
 
+    # --- записи, созданные тестом ---
+
+    @step("В ответе есть запись {key_field}={key}")
+    def check_has_record(self, items: list[dict], key_field: str, key: Any) -> OdataChecker:
+        """Запись, подходящая под запрос (например, созданная тестом), вернулась в ответе."""
+        if not any(item.get(key_field) == key for item in items):
+            self.fail(f"Нет записи {key_field}={key!r} среди {len(items)} записей ответа")
+        return self
+
+    @step("В ответе нет записи {key_field}={key}")
+    def check_no_record(self, items: list[dict], key_field: str, key: Any) -> OdataChecker:
+        """Запись, не подходящая под запрос (например, созданная тестом), в ответ не попала."""
+        if any(item.get(key_field) == key for item in items):
+            self.fail(f"В ответе есть запись {key_field}={key!r}, которая не должна была попасть в выборку")
+        return self
+
     # --- $top, $skip, $count ---
 
-    @allure.step("$top={limit}: записей не больше лимита")
+    @step("$top={limit}: записей не больше лимита")
     def check_top_limit(self, items: list[dict], limit: int) -> OdataChecker:
+        """Записей не больше ``limit``. Доказывает что-то, только если на стенде записей больше лимита."""
         if len(items) > limit:
             self.fail(f"$top={limit}: вернулось {len(items)} записей")
         return self
 
-    @allure.step("$skip={skip}: страница сдвинута")
+    @step("$skip={skip}: страница сдвинута")
     def check_skip(
         self, first_page: list[dict], skipped_page: list[dict], skip: int, key_field: str = "Id"
     ) -> OdataChecker:
-        """Первая запись страницы со $skip — запись номер ``skip`` первой страницы (при одном $orderby)."""
+        """Первая запись страницы со $skip — запись номер ``skip`` первой страницы.
+
+        Порядок должен быть однозначным: сортируйте по полю и ключу (``Title asc, Id asc``).
+        """
         if len(first_page) <= skip or not skipped_page:
-            self.fail(f"$skip={skip}: мало записей для проверки: {len(first_page)} и {len(skipped_page)}")
-        elif first_page[skip].get(key_field) != skipped_page[0].get(key_field):
-            self.fail(
-                f"$skip={skip}: первая запись {key_field}={skipped_page[0].get(key_field)}, "
-                f"ожидалась {first_page[skip].get(key_field)}"
-            )
+            return self.fail(f"$skip={skip}: мало записей для проверки: {len(first_page)} и {len(skipped_page)}")
+        expected, actual = first_page[skip], skipped_page[0]
+        for name, record in (("первой страницы", expected), ("страницы со $skip", actual)):
+            if key_field not in record:
+                return self.fail(f"$skip={skip}: у записи {name} нет поля {key_field}")
+            if record[key_field] is None:
+                return self.fail(f"$skip={skip}: у записи {name} пустой ключ {key_field}")
+        if expected[key_field] != actual[key_field]:
+            self.fail(f"$skip={skip}: первая запись {key_field}={actual[key_field]}, ожидалась {expected[key_field]}")
         return self
 
-    @allure.step("$count: в ответе есть @odata.count")
+    @step("$count: в ответе есть @odata.count")
     def check_count(self, response: dict) -> OdataChecker:
         """В ответе целое ``@odata.count`` и записей в ``value`` не больше него."""
         count = response.get("@odata.count")
-        items = response.get("value", [])
-        if not isinstance(count, int):
+        items = response.get("value")
+        if not isinstance(items, list):
+            self.fail(f"$count: в ответе нет массива value: {str(response)[:300]}")
+        elif isinstance(count, bool) or not isinstance(count, int):
             self.fail(f"$count: @odata.count = {count!r}, ожидалось целое число")
         elif len(items) > count:
             self.fail(f"$count: в value {len(items)} записей, больше чем @odata.count = {count}")
@@ -106,7 +158,7 @@ class OdataChecker(Checker):
 
     # --- $expand, $orderby ---
 
-    @allure.step("$expand={field}: связанные данные на месте")
+    @step("$expand={field}: связанные данные на месте")
     def check_expand_field(
         self, items: list[dict], field: str, expected_type: type | None = None
     ) -> OdataChecker:
@@ -118,7 +170,7 @@ class OdataChecker(Checker):
             f"$expand={field}",
         )
 
-    @allure.step("$orderby: сортировка по {field}")
+    @step("$orderby: сортировка по {field}")
     def check_orderby(self, items: list[dict], field: str, reverse: bool = False) -> OdataChecker:
         """Непустые значения поля идут по порядку.
 
@@ -136,11 +188,22 @@ class OdataChecker(Checker):
     # --- служебное ---
 
     def _check_all(self, items: list[dict], field: str, is_valid: Callable[[Any], bool], rule: str) -> OdataChecker:
-        """Одна ошибка на все записи, где значение поля не подходит: сколько их и какие значения."""
-        bad = [item.get(field) for item in items if not is_valid(item.get(field))]
+        """Одна ошибка на все записи, где значение поля не подходит: сколько их и какие значения.
+
+        Записи без поля — отдельная ошибка: отсутствующее поле не считается значением ``None``.
+        """
+        missing = sum(1 for item in items if field not in item)
+        if missing:
+            self.fail(f"{rule}: поля {field} нет в {missing} из {len(items)} записей")
+        bad = [item[field] for item in items if field in item and not is_valid(item[field])]
         if bad:
             self.fail(f"{rule}: не подходят {len(bad)} из {len(items)} записей, значения: {bad[:5]}")
         return self
+
+
+def _field_names_preview(fields: set[str]) -> str:
+    """Не больше пяти имён полей, каждое до 80 символов; значения записей не показываются."""
+    return repr([name if len(name) <= 80 else name[:80] + "…" for name in sorted(fields)[:5]])
 
 
 def _to_date(value: Any) -> date | None:

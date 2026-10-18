@@ -1,0 +1,7 @@
+# Базовый профиль: API-тесты, проверки, Allure. Остальные профили его включают.
+-c constraints.txt
+pytest>=8
+allure-pytest>=2.16
+requests>=2.34
+pydantic>=2.13
+python-dotenv>=1.0
