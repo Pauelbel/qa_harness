@@ -17,11 +17,19 @@ import pytest
 from checks.excel import ExcelChecker, read_excel
 from config import RUN_DIR
 
+# ------------------------------------------------------------------------
+# Параметры отчёта: таймаут формирования и место хранения скачанного файла
+# ------------------------------------------------------------------------
+
 REPORT_URL = "/api/v1/reports/generate"
 REPORT_TIMEOUT = 300  # секунд: формирование отчёта на бэкенде бывает долгим
 KEEP_REPORTS = os.getenv("KEEP_DQ_REPORTS", "true").lower() in ("true", "1", "yes")
 OUTPUT_DIR = Path(os.getenv("DQ_REPORTS_OUTPUT_DIR") or RUN_DIR / "dq_reports")
 
+
+# ------------------------------------------------------------------------
+# Отчёт на модуль: скачиваем и читаем один раз для всех тестов файла
+# ------------------------------------------------------------------------
 
 @pytest.fixture(scope="module")
 def dq_report(request, tmp_path_factory, app_api) -> Iterator[tuple[Path, str | None, pd.DataFrame]]:
@@ -40,6 +48,10 @@ def dq_report(request, tmp_path_factory, app_api) -> Iterator[tuple[Path, str | 
     if not KEEP_REPORTS:
         path.unlink(missing_ok=True)
 
+
+# ------------------------------------------------------------------------
+# Checker на тест: общая таблица, отдельный список ошибок для каждой проверки
+# ------------------------------------------------------------------------
 
 @pytest.fixture
 def checker(dq_report) -> ExcelChecker:

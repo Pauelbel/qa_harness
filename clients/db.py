@@ -24,9 +24,17 @@ from psycopg2.extras import RealDictCursor
 MAX_ATTACHED_ROWS = 20  # сколько строк результата приложить к шагу
 
 
+# ------------------------------------------------------------------------
+# PostgreSQL: соединение на один запрос, значения передаются через %s
+# ------------------------------------------------------------------------
+
 class PostgresClient:
     def __init__(self, **connection_params: Any) -> None:
         self.connection_params = connection_params
+
+    # ------------------------------------------------------------------------
+    # Чтение: SELECT возвращает список словарей, соединение закрывается после запроса
+    # ------------------------------------------------------------------------
 
     def fetch_all(self, query: str, params: Sequence[Any] | None = None) -> list[dict]:
         """SELECT: все строки, каждая — словарь «колонка → значение»."""
@@ -40,6 +48,10 @@ class PostgresClient:
             _attach(query, params, f"Строк: {len(rows)}\n{pprint.pformat(rows[:MAX_ATTACHED_ROWS], width=120)}{more}")
             return rows
 
+    # ------------------------------------------------------------------------
+    # Изменения: commit при успехе, rollback при исключении
+    # ------------------------------------------------------------------------
+
     def execute(self, query: str, params: Sequence[Any] | None = None) -> None:
         """INSERT, UPDATE, DELETE: выполняет запрос и сохраняет изменения (commit)."""
         with allure.step("SQL: изменение"):
@@ -49,6 +61,10 @@ class PostgresClient:
                     affected = cursor.rowcount
             _attach(query, params, f"Затронуто строк: {affected}")
 
+
+# ------------------------------------------------------------------------
+# Отчёт SQL: текст запроса, параметры и результат прикладываются к шагу
+# ------------------------------------------------------------------------
 
 def _attach(query: str, params: Sequence[Any] | None, result: str) -> None:
     text = f"{textwrap.dedent(query).strip()}\n\nПараметры: {list(params or [])!r}\n\n{result}"

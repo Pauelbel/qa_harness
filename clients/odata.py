@@ -12,6 +12,10 @@ from __future__ import annotations
 from clients.http import HttpClient
 
 
+# ------------------------------------------------------------------------
+# OData-клиент: ответ целиком или записи value, HTTP-отчёт наследуется от HttpClient
+# ------------------------------------------------------------------------
+
 class OdataClient(HttpClient):
     def get_response(self, url: str, params: dict | None = None) -> dict:
         """Ответ целиком: объект с массивом ``value``. Статус не 200 или другая структура — тест падает."""

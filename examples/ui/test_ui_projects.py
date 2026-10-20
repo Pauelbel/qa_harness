@@ -5,6 +5,10 @@ import allure
 from examples.ui.pages.projects_page import ProjectsPage
 
 
+# ------------------------------------------------------------------------
+# Проекты: auth_page уже авторизована, тестовые записи создают фикстуры
+# ------------------------------------------------------------------------
+
 @allure.epic("Фронтенд")
 @allure.feature("Проекты")
 class TestProjectsPage:

@@ -24,8 +24,14 @@ from report import step
 ODATA_SYSTEM_FIELDS = ("@odata.id", "@odata.etag", "@odata.editLink")
 
 
+# ------------------------------------------------------------------------
+# OData-проверки: работают с полученными данными, запросов не выполняют
+# ------------------------------------------------------------------------
+
 class OdataChecker(Checker):
-    # --- $select ---
+    # ------------------------------------------------------------------------
+    # $select: проверяем состав полей, значения проверяются отдельно
+    # ------------------------------------------------------------------------
 
     @step("$select={field}: поле есть в каждой записи")
     def check_select_property(self, items: list[dict], field: str) -> OdataChecker:
@@ -43,9 +49,12 @@ class OdataChecker(Checker):
         return self
 
     @step("$select: в ответе все выбранные поля без лишних")
-    def check_select_strict(self, items: list[dict], fields: list[str]) -> OdataChecker:
+    def check_select_strict(
+        self, items: list[dict], fields: list[str], system_fields: list[str] | None = None
+    ) -> OdataChecker:
         """В каждой записи есть все выбранные поля и нет лишних, кроме системных OData.
 
+        Разрешены аннотации ``@odata.*`` и дополнительные ``system_fields``.
         Значения выбранных полей (включая ``None`` и пустую строку) не проверяются.
         """
         selected = set(fields)
@@ -60,12 +69,15 @@ class OdataChecker(Checker):
                 f"$select: выбранных полей нет в {len(missing)} из {len(items)} записей; "
                 f"первые индексы (с нуля) и отсутствующие поля: {examples}"
             )
-        extra = {key for item in items for key in item} - selected - set(ODATA_SYSTEM_FIELDS)
+        allowed = selected | set(ODATA_SYSTEM_FIELDS) | set(system_fields or [])
+        extra = {key for item in items for key in item if key not in allowed and not key.startswith("@odata.")}
         if extra:
             self.fail(f"$select: лишних полей {len(extra)}; первые имена: {_field_names_preview(extra)}")
         return self
 
-    # --- $filter ---
+    # ------------------------------------------------------------------------
+    # $filter: все записи соответствуют условию, пустая выборка проходит
+    # ------------------------------------------------------------------------
 
     @step("$filter: {field} eq {expected}")
     def check_filter_eq(self, items: list[dict], field: str, expected: Any) -> OdataChecker:
@@ -87,18 +99,23 @@ class OdataChecker(Checker):
 
     @step("$filter: {field} от {start} до {end}")
     def check_filter_date_range(
-        self, items: list[dict], field: str, start: date | str, end: date | str
+        self, items: list[dict], field: str, start: date | str, end: date | str,
+        date_format: str = "%Y-%m-%d",
     ) -> OdataChecker:
-        """Дата записи в диапазоне [start, end]; даты — date или строки «2026-01-31»."""
-        start, end = _to_date(start), _to_date(end)
+        """Дата в [start, end]; строки — ISO или в заданном ``date_format``."""
+        start, end = _to_date(start, date_format), _to_date(end, date_format)
+        if start is None or end is None or start > end:
+            raise ValueError("Для диапазона нужны корректные даты с началом не позже окончания")
 
         def in_range(value: Any) -> bool:
-            day = _to_date(value)
+            day = _to_date(value, date_format)
             return day is not None and start <= day <= end
 
         return self._check_all(items, field, in_range, f"{field} от {start} до {end}")
 
-    # --- записи, созданные тестом ---
+    # ------------------------------------------------------------------------
+    # Тестовые записи: подтверждаем включение и исключение конкретных записей
+    # ------------------------------------------------------------------------
 
     @step("В ответе есть запись {key_field}={key}")
     def check_has_record(self, items: list[dict], key_field: str, key: Any) -> OdataChecker:
@@ -114,7 +131,9 @@ class OdataChecker(Checker):
             self.fail(f"В ответе есть запись {key_field}={key!r}, которая не должна была попасть в выборку")
         return self
 
-    # --- $top, $skip, $count ---
+    # ------------------------------------------------------------------------
+    # $top, $skip, $count: лимит, сдвиг страницы и общее число записей
+    # ------------------------------------------------------------------------
 
     @step("$top={limit}: записей не больше лимита")
     def check_top_limit(self, items: list[dict], limit: int) -> OdataChecker:
@@ -156,7 +175,9 @@ class OdataChecker(Checker):
             self.fail(f"$count: в value {len(items)} записей, больше чем @odata.count = {count}")
         return self
 
-    # --- $expand, $orderby ---
+    # ------------------------------------------------------------------------
+    # $expand, $orderby: связанные данные и порядок записей
+    # ------------------------------------------------------------------------
 
     @step("$expand={field}: связанные данные на месте")
     def check_expand_field(
@@ -185,7 +206,9 @@ class OdataChecker(Checker):
             self.fail(f"$orderby: записи не отсортированы по {field} {'desc' if reverse else 'asc'}: {values[:10]}")
         return self
 
-    # --- служебное ---
+    # ------------------------------------------------------------------------
+    # Диагностика: отсутствие поля и неподходящее значение учитываются отдельно
+    # ------------------------------------------------------------------------
 
     def _check_all(self, items: list[dict], field: str, is_valid: Callable[[Any], bool], rule: str) -> OdataChecker:
         """Одна ошибка на все записи, где значение поля не подходит: сколько их и какие значения.
@@ -201,13 +224,17 @@ class OdataChecker(Checker):
         return self
 
 
+# ------------------------------------------------------------------------
+# Вспомогательные функции: короткий список полей и приведение дат
+# ------------------------------------------------------------------------
+
 def _field_names_preview(fields: set[str]) -> str:
     """Не больше пяти имён полей, каждое до 80 символов; значения записей не показываются."""
     return repr([name if len(name) <= 80 else name[:80] + "…" for name in sorted(fields)[:5]])
 
 
-def _to_date(value: Any) -> date | None:
-    """date, datetime или ISO-строка («2026-01-31», «2026-01-31T10:00:00Z») → date; иначе None."""
+def _to_date(value: Any, date_format: str = "%Y-%m-%d") -> date | None:
+    """date, datetime, ISO-строка или строка date_format → date; иначе None."""
     if isinstance(value, datetime):
         return value.date()
     if isinstance(value, date):
@@ -215,4 +242,7 @@ def _to_date(value: Any) -> date | None:
     try:
         return datetime.fromisoformat(str(value)).date()
     except ValueError:
-        return None
+        try:
+            return datetime.strptime(str(value), date_format).date()
+        except ValueError:
+            return None

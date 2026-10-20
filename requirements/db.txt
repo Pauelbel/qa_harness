@@ -1,3 +1,5 @@
-# DB: PostgreSQL (clients/db.py, examples/db)
+# ------------------------------------------------------------------------
+# DB: PostgreSQL для clients/db.py и примеров examples/db
+# ------------------------------------------------------------------------
 -r base.txt
 psycopg2-binary>=2.9

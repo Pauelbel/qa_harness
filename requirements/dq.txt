@@ -1,4 +1,6 @@
-# DQ: Excel-отчёты (checks/excel.py, examples/dq_reports)
+# ------------------------------------------------------------------------
+# DQ: чтение Excel и проверки отчётов в checks/excel.py и examples/dq_reports
+# ------------------------------------------------------------------------
 -r base.txt
 pandas>=3.0
 openpyxl>=3.1

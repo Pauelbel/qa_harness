@@ -25,13 +25,17 @@ from report import step
 MAX_EXAMPLES = 3  # сколько номеров строк и значений показать в ошибке
 
 
-def read_excel(path: str | Path) -> pd.DataFrame:
+# ------------------------------------------------------------------------
+# Чтение листа: пробелы обрезаются, пустые ячейки становятся pd.NA
+# ------------------------------------------------------------------------
+
+def read_excel(path: str | Path, sheet_name: str | int = 0) -> pd.DataFrame:
     """Читает xlsx: обрезает пробелы у текста, пустые ячейки → ``pd.NA``.
 
     Типы ячеек сохраняются: в смешанной колонке число 123 остаётся числом, а не текстом "123".
     Текст "None", "nan", "NA" остаётся значением, а не пропуском.
     """
-    df = pd.read_excel(path, engine="openpyxl", keep_default_na=False, na_values=[""])
+    df = pd.read_excel(path, engine="openpyxl", keep_default_na=False, na_values=[""], sheet_name=sheet_name)
     df.columns = [str(c).strip() for c in df.columns]
     for col in df.columns:
         if _is_text(df[col]):
@@ -49,13 +53,19 @@ def _clean_cell(value: Any) -> Any:
     return pd.NA if _is_na(value) else value
 
 
+# ------------------------------------------------------------------------
+# ExcelChecker: таблица и имя файла, накопление ошибок — в общем Checker
+# ------------------------------------------------------------------------
+
 class ExcelChecker(Checker):
     def __init__(self, df: pd.DataFrame, name: str = "", filename: str | None = None) -> None:
         super().__init__(title=f"Отчёт: {name}" if name else "")
         self.df = df
         self.filename = filename  # имя файла от сервера, для check_filename
 
-    # --- структура ------------------------------------------------------
+    # ------------------------------------------------------------------------
+    # Структура: колонки, имя файла, дубликаты и заполненность отчёта
+    # ------------------------------------------------------------------------
 
     @step("Структура: состав и порядок колонок")
     def check_columns(self, expected: Sequence[str], strict_order: bool = False) -> ExcelChecker:
@@ -105,20 +115,27 @@ class ExcelChecker(Checker):
 
     @step("Статистика заполненности колонок")
     def get_fill_statistics(self, columns: Sequence[str] | None = None) -> pd.DataFrame:
-        """Таблица заполненности колонок; ошибок не создаёт."""
+        """Таблица заполненности; пустой отчёт и отсутствующие колонки — ошибка."""
         total = len(self.df)
+        if not total:
+            raise AssertionError("Нельзя собрать статистику: отчёт не содержит строк")
+        selected = list(columns) if columns is not None else list(self.df.columns)
+        missing = [column for column in selected if column not in self.df.columns]
+        if missing:
+            raise AssertionError(f"Нельзя собрать статистику: отсутствуют столбцы {missing}")
         rows = []
-        for col in columns or self.df.columns:
-            if col in self.df.columns and total:
-                empty = int(self._empty(col).sum())
-                rows.append((col, total - empty, empty, round((total - empty) / total * 100, 2)))
+        for col in selected:
+            empty = int(self._empty(col).sum())
+            rows.append((col, total - empty, empty, round((total - empty) / total * 100, 2)))
         return pd.DataFrame(rows, columns=["Колонка", "Заполнено", "Пусто", "Заполненность, %"])
 
     def get_row_count(self) -> int:
         """Количество строк данных в отчёте (без заголовка)."""
         return len(self.df)
 
-    # --- значения -------------------------------------------------------
+    # ------------------------------------------------------------------------
+    # Значения: пустые ячейки пропускаются, обязательность задаёт check_required
+    # ------------------------------------------------------------------------
 
     @step("Обязательные колонки заполнены")
     def check_required(self, columns: Sequence[str]) -> ExcelChecker:
@@ -160,14 +177,23 @@ class ExcelChecker(Checker):
 
     @step("{column}: период из двух дат")
     def check_date_period(self, column: str, fmt: str = "%d.%m.%Y") -> ExcelChecker:
-        """Период вида ``01.01.2026 - 31.01.2026``: две корректные даты через дефис."""
+        """Период вида ``01.01.2026 - 31.01.2026`` с началом не позже окончания."""
         if not self._missing(column):
             parts = self.df[column].astype(str).str.extract(r"^\s*(.+?)\s*[-–—]\s*(.+?)\s*$")
             start = pd.to_datetime(parts[0], format=fmt, errors="coerce")
             end = pd.to_datetime(parts[1], format=fmt, errors="coerce")
             bad = ~self._empty(column) & (start.isna() | end.isna())
             self._add(bad, column, f"должно содержать две корректные даты формата {fmt}, разделённые дефисом")
+            self._add(
+                start.notna() & end.notna() & (start > end),
+                column,
+                "дата начала периода не должна быть позже даты окончания",
+            )
         return self
+
+    # ------------------------------------------------------------------------
+    # Числа: заполненные нечисловые ячейки считаются нарушением
+    # ------------------------------------------------------------------------
 
     @step("{column}: число")
     def check_is_numeric(self, column: str) -> ExcelChecker:
@@ -257,7 +283,9 @@ class ExcelChecker(Checker):
         )
         return self
 
-    # --- служебное ------------------------------------------------------
+    # ------------------------------------------------------------------------
+    # Диагностика: одна ошибка на правило, номера строк учитывают заголовок Excel
+    # ------------------------------------------------------------------------
 
     def _add(self, mask: pd.Series, column: str, rule: str) -> None:
         """Одна ошибка на правило: сколько строк нарушают, номера строк и примеры значений."""
@@ -295,6 +323,10 @@ class ExcelChecker(Checker):
         self._add(~self._empty(column) & numeric.isna(), column, "значение должно быть числом")
         return numeric
 
+
+# ------------------------------------------------------------------------
+# Вспомогательные функции: типы ячеек, границы чисел и короткие сообщения
+# ------------------------------------------------------------------------
 
 def _is_na(value: Any) -> bool:
     try:

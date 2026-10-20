@@ -18,7 +18,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from typing import NoReturn
 
@@ -28,8 +28,12 @@ from playwright.sync_api import Locator, Page, expect
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 
+# ------------------------------------------------------------------------
+# Шаги браузера: ошибки Playwright превращаются в AssertionError с вложением
+# ------------------------------------------------------------------------
+
 @contextmanager
-def _allure_step(title: str, timeout_ms: float) -> Iterator[None]:
+def _allure_step(title: str, timeout_ms: float) -> Generator[None, None, None]:
     """Шаг Allure; ошибка Playwright превращается в понятное падение с вложением «Ошибка»."""
     with allure.step(title):
         try:
@@ -47,6 +51,10 @@ def _fail(message: str, error: Exception) -> NoReturn:
     allure.attach(details, name="Ошибка", attachment_type=allure.attachment_type.TEXT)
     raise AssertionError(details) from error
 
+
+# ------------------------------------------------------------------------
+# Элемент: локатор, понятное имя для отчёта и таймаут ожидания
+# ------------------------------------------------------------------------
 
 class BaseElement:
     def __init__(self, locator: Locator, name: str, timeout: float = 20) -> None:
@@ -132,6 +140,10 @@ class BaseElement:
             expect(self.locator).to_have_count(count, timeout=self.timeout)
 
 
+# ------------------------------------------------------------------------
+# Страница: открытие от base_url браузера и проверки переходов по адресу
+# ------------------------------------------------------------------------
+
 class BasePage:
     timeout = 30  # секунд на загрузку страницы
 
@@ -143,10 +155,18 @@ class BasePage:
         locator = self.page.locator(selector) if isinstance(selector, str) else selector
         return BaseElement(locator, name, timeout)
 
+    # ------------------------------------------------------------------------
+    # Навигация: относительный путь считается от base_url в browser_context_args
+    # ------------------------------------------------------------------------
+
     def open(self, path: str = "/") -> None:
         """Открыть страницу; ``path`` считается от base_url браузера (его задаёт browser_context_args)."""
         with _allure_step(f"Открыть {path}", self.timeout * 1000):
             self.page.goto(path, timeout=self.timeout * 1000)
+
+    # ------------------------------------------------------------------------
+    # Проверки адреса: expect ждёт перехода до заданного таймаута
+    # ------------------------------------------------------------------------
 
     def check_url_contains(self, part: str, timeout: float = 20) -> None:
         """Адрес страницы содержит ``part`` (ждёт перехода до таймаута)."""

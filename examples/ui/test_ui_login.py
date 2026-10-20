@@ -6,6 +6,10 @@ from config import ACTIVE_CONFIG
 from examples.ui.pages.login_page import LoginPage
 
 
+# ------------------------------------------------------------------------
+# Вход: фикстура page открывает браузер без предварительной авторизации
+# ------------------------------------------------------------------------
+
 @allure.epic("Фронтенд")
 @allure.feature("Авторизация")
 class TestLogin:

@@ -1,3 +1,5 @@
-# Vault: секреты из HashiCorp Vault (SECRETS_SOURCE=vault в config.py)
+# ------------------------------------------------------------------------
+# Vault: чтение секретов HashiCorp Vault при SECRETS_SOURCE=vault
+# ------------------------------------------------------------------------
 -r base.txt
 hvac>=2.0

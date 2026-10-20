@@ -32,6 +32,10 @@ SECRET_WORDS = ("password", "token", "secret", "authorization", "api_key", "apik
 MAX_LOGGED_BODY = 2000
 
 
+# ------------------------------------------------------------------------
+# HTTP-сессия: общий адрес, заголовки и таймаут для запросов системы
+# ------------------------------------------------------------------------
+
 class HttpClient(requests.Session):
     """``requests.Session`` с адресом системы, заголовками, таймаутом по умолчанию и логом.
 
@@ -43,6 +47,10 @@ class HttpClient(requests.Session):
         self.base_url = base_url.rstrip("/")
         self.headers.update(headers or {})
         self.verify = verify
+
+    # ------------------------------------------------------------------------
+    # Отправка запроса: HTTP-шаг, вложения и маскирование секретов в диагностике
+    # ------------------------------------------------------------------------
 
     def request(self, method, url, *args, **kwargs) -> requests.Response:
         if url.startswith("/"):
@@ -88,8 +96,9 @@ class HttpClient(requests.Session):
             logger.error("Ответ сервиса: %s", body)
         return response
 
-    # Обёртки Session показывают исходные аргументы при pytest --tb=long.
-    # Сохраняем семантику requests, но скрываем кадры с URL, заголовками и телом.
+    # ------------------------------------------------------------------------
+    # HTTP-методы: семантика Session сохраняется, аргументы скрыты в traceback
+    # ------------------------------------------------------------------------
     def get(self, url, params=None, **kwargs) -> requests.Response:
         __tracebackhide__ = True
         kwargs.setdefault("allow_redirects", True)
@@ -121,6 +130,10 @@ class HttpClient(requests.Session):
         __tracebackhide__ = True
         return self.request("DELETE", url, **kwargs)
 
+    # ------------------------------------------------------------------------
+    # JSON и файлы: статус 200 обязателен, загрузка файла выполняется по частям
+    # ------------------------------------------------------------------------
+
     def get_json(self, url: str, params: dict | None = None, **kwargs) -> Any:
         """GET и JSON ответа. Статус не 200 — тест падает сразу: проверять дальше нечего."""
         __tracebackhide__ = True
@@ -140,6 +153,10 @@ class HttpClient(requests.Session):
                 file.write(chunk)
         return _filename(response.headers.get("Content-Disposition", ""))
 
+
+# ------------------------------------------------------------------------
+# Диагностика ответа: адрес без секретов, статус и безопасная ошибка JSON
+# ------------------------------------------------------------------------
 
 def response_summary(response: requests.Response) -> str:
     """Метод, адрес без секретов и статус: безопасная диагностика HTTP-ошибки."""
@@ -163,6 +180,10 @@ def _expect_ok(response: requests.Response) -> None:
         f"{response_summary(response)}: ожидался статус 200. Ответ: {_body_text(response)[:500]}"
     )
 
+
+# ------------------------------------------------------------------------
+# Тела запросов и ответов: маскируем секретные поля JSON и URL-encoded форм
+# ------------------------------------------------------------------------
 
 def _is_secret(key: str) -> bool:
     key = key.lower()
@@ -254,6 +275,10 @@ def _body_text(response: requests.Response) -> str:
         return _formatted_body(response.text, response.headers.get("Content-Type", ""))
     return _formatted_body(data)
 
+
+# ------------------------------------------------------------------------
+# Заголовки и адреса: скрываем секреты в URL и извлекаем имя скачанного файла
+# ------------------------------------------------------------------------
 
 def _hide_secrets(url: str) -> str:
     """Заменяет значения секретных query-параметров на ``***`` для лога."""
