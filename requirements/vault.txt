@@ -1,5 +1,5 @@
 # ------------------------------------------------------------------------
-# Vault: чтение секретов HashiCorp Vault при SECRETS_SOURCE=vault
+# Vault: плагин qa.layers.vault — секреты HashiCorp Vault при SECRETS_SOURCE=vault
 # ------------------------------------------------------------------------
 -r base.txt
 hvac>=2.0

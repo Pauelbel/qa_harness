@@ -1,12 +1,13 @@
-"""Пример DB-тестов: запрос ищет нарушения, тест проверяет, что их нет.
+"""Когда брать: проверка данных в БД — запрос ищет нарушения, тест проверяет, что их нет;
+запись создана фикстурой в БД (created_order) или через API (create_order) и проверяется запросом.
 
-app_db — клиент базы (фикстура из examples/conftest.py): fetch_all() возвращает строки словарями.
+app_db — клиент базы (фикстура из tests/conftest.py): fetch_all() возвращает строки словарями.
 Значения в запрос передаются вторым аргументом (%s), а не f-строкой.
 """
 
 import allure
 
-from checks.base import Checker
+from qa.base.checks import Checker
 
 
 # ------------------------------------------------------------------------
@@ -56,7 +57,7 @@ class TestOrdersConsistency:
 
 
     # ------------------------------------------------------------------------
-    # Проверка тестовых данных: created_order управляет созданием и удалением записей
+    # Тестовые данные: созданы в БД (created_order) или через API (create_order)
     # ------------------------------------------------------------------------
 
     @allure.title("Заказ, созданный тестом, привязан к своему проекту")
@@ -71,3 +72,13 @@ class TestOrdersConsistency:
             checker.check_equal([row["id"] for row in rows], [created_order["id"]], "Заказы проекта")
             checker.check_equal(rows[0]["status"] if rows else None, "draft", "Статус нового заказа")
 
+    @allure.title("Заказ, созданный через API, сохранён в БД")
+    @allure.description("Предусловие через API: фабрика create_order создаёт заказ и удаляет его после теста.")
+    def test_api_order_saved(self, app_db, create_order):
+        order = create_order()
+
+        rows = app_db.fetch_all("SELECT title FROM orders WHERE id = %s", [order["Id"]])
+
+        with Checker() as checker:
+            checker.check_equal(len(rows), 1, "Строк заказа в БД")
+            checker.check_equal(rows[0]["title"] if rows else None, order["Title"], "Название в БД")

@@ -1,7 +1,7 @@
 """Страница «Проекты»."""
 
-from clients.browser import BasePage
-from report import step
+from qa.base.report import step
+from qa.layers.ui import BasePage
 
 # ------------------------------------------------------------------------
 # Локаторы: заголовок раздела и строка проекта по названию

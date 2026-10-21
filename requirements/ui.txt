@@ -1,5 +1,5 @@
 # ------------------------------------------------------------------------
-# UI: Playwright для clients/browser.py и примеров examples/ui
+# UI: плагин qa.layers.ui (Playwright, Page Object) и примеры tests/ui
 # После установки: python -m playwright install chromium
 # Linux без библиотек браузера: python -m playwright install --with-deps chromium
 # ------------------------------------------------------------------------

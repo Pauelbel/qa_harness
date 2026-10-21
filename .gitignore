@@ -10,3 +10,5 @@ __pycache__/
 # ------------------------------------------------------------------------
 artifacts/
 allure-report/
+# Запрещённые слова для scripts/check_publish.sh
+.harness-denylist

@@ -1,4 +1,6 @@
-"""Проверки качества данных Excel-отчёта.
+"""Слой DQ: проверки качества данных Excel-отчёта и скачивание отчёта для тестов. Профиль requirements/dq.txt.
+
+    pytest_plugins = ["qa.hooks.common", ..., "qa.layers.dq"]
 
     with ExcelChecker(read_excel("report.xlsx"), name="report.xlsx") as checker:
         checker.check_date("Дата")
@@ -8,19 +10,46 @@
 Пустые ячейки проверки значений пропускают; заполненность проверяет ``check_required``.
 Числовые проверки (целое, знаки после запятой, диапазон, расчёт стоимости) сами считают
 ошибкой заполненную ячейку, которая не является числом: ``check_is_numeric`` перед ними не нужен.
+
+Отчёт скачивается один раз на файл тестов, каждый тест получает свой ``checker``.
+В тестовом файле должны быть ``FILE`` (имя файла отчёта) и ``PAYLOAD`` (параметры формирования).
+Тест просит ``checker`` — ExcelChecker отчёта своего файла — и пишет проверки в ``with checker:``.
+
+Модуль не знает, где формируется отчёт: проект задаёт это фикстурой ``dq_client`` в conftest.py
+рядом с тестами — функцией ``download(path, payload)``, которая сохраняет отчёт в ``path``
+и возвращает имя файла от сервера (или ``None``).
+
+    @pytest.fixture(scope="session")
+    def dq_client(app_api):
+        def download(path, payload):
+            return app_api.download("/api/v1/reports/generate", path, method="POST", json=payload, timeout=300)
+        return download
+
+Переменные окружения:
+    KEEP_DQ_REPORTS=false   — удалить отчёт после тестов (по умолчанию отчёты остаются)
+    DQ_REPORTS_OUTPUT_DIR   — куда сохранять отчёты (по умолчанию RUN_DIR/dq_reports)
 """
 
 from __future__ import annotations
 
+from qa.base.config import require
+
+require(__name__, "dq", "pandas", "openpyxl")
+
+# Остальные импорты — после проверки: без зависимостей ошибка называет профиль, а не модуль.
+import os
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import pytest
 
-from checks.base import Checker
-from report import step
+from qa.base import config as harness_config
+from qa.base.checks import Checker
+from qa.base.report import step
+
 
 MAX_EXAMPLES = 3  # сколько номеров строк и значений показать в ошибке
 
@@ -369,3 +398,57 @@ def _show(value: Any, max_length: int = 120) -> str:
         return "<пусто>"
     text = str(value).replace("\n", " ").replace("\r", " ")
     return f"«{text[:max_length]}…»" if len(text) > max_length else f"«{text}»"
+
+
+# ------------------------------------------------------------------------
+# Место хранения: папка запуска или своя папка, отчёты можно не хранить
+# ------------------------------------------------------------------------
+
+def _keep_reports() -> bool:
+    return os.getenv("KEEP_DQ_REPORTS", "true").lower() in ("true", "1", "yes")
+
+
+def _output_dir() -> Path:
+    return Path(os.getenv("DQ_REPORTS_OUTPUT_DIR") or harness_config.RUN_DIR / "dq_reports")
+
+
+# ------------------------------------------------------------------------
+# Фикстура проекта: заглушка с подсказкой, проект переопределяет её в conftest.py
+# ------------------------------------------------------------------------
+
+@pytest.fixture(scope="session")
+def dq_client():
+    """Функция ``download(path, payload)``. Определите фикстуру dq_client в conftest.py рядом с тестами."""
+    pytest.fail("Определите фикстуру dq_client в tests/conftest.py")
+
+
+# ------------------------------------------------------------------------
+# Отчёт на модуль: скачиваем и читаем один раз для всех тестов файла
+# ------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def dq_report(request, tmp_path_factory, dq_client) -> Iterator[tuple[Path, str | None, pd.DataFrame]]:
+    """Отчёт файла тестов: путь, имя файла от сервера и таблица."""
+    missing = [name for name in ("FILE", "PAYLOAD") if not hasattr(request.module, name)]
+    if missing:
+        pytest.fail(f"В файле {request.module.__name__} нет {', '.join(missing)}: задайте их в начале файла")
+
+    keep = _keep_reports()
+    folder = _output_dir() if keep else tmp_path_factory.mktemp("dq_reports")
+    path = folder / request.module.FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    filename = dq_client(path, request.module.PAYLOAD)
+    yield path, filename, read_excel(path)
+    if not keep:
+        path.unlink(missing_ok=True)
+
+
+# ------------------------------------------------------------------------
+# Checker на тест: общая таблица, отдельный список ошибок для каждой проверки
+# ------------------------------------------------------------------------
+
+@pytest.fixture
+def checker(dq_report) -> ExcelChecker:
+    """Новый checker на каждый тест: ошибки одного теста не попадают в другой. В тесте — ``with checker:``."""
+    path, filename, df = dq_report
+    return ExcelChecker(df, name=path.name, filename=filename)

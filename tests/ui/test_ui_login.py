@@ -1,9 +1,12 @@
-"""Пример UI-теста без предварительного входа: стандартная page анонимна, тест логинится сам."""
+"""Когда брать: UI-тест без предварительного входа — страница входа, публичные страницы.
+
+page — стандартная фикстура pytest-playwright: браузер без входа, тест логинится сам.
+"""
 
 import allure
 
-from config import ACTIVE_CONFIG
-from examples.ui.pages.login_page import LoginPage
+from qa.base.config import ACTIVE_CONFIG
+from tests.ui.pages.login_page import LoginPage
 
 
 # ------------------------------------------------------------------------

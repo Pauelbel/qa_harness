@@ -1,162 +1,110 @@
 # qa-harness
 
-Набор скриптов для автотестов на pytest: клиенты систем, проверки и примеры тестов каждого слоя.
-Ядро ничего не знает о конкретной системе: адреса, токены, SQL и локаторы живут в тестах и их `conftest.py`.
+Набор готовых компонентов и примеров для API, PostgreSQL, UI и Excel-тестов на pytest.
 
-Правила для AI-агентов и новых участников — [AGENTS.md](AGENTS.md).
+## Установка
 
-## Быстрый старт
-
-Нужны Python 3.12+ и Git. Ставьте только нужные слои: базовый профиль — это API-тесты.
+Нужен Python 3.12+.
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate                    # Windows PowerShell: .\.venv\Scripts\Activate.ps1
-pip install -r requirements/base.txt         # + профили нужных слоёв, таблица ниже
-cp .env.example .env                         # заполните адреса и секреты
-python -m pytest                             # тесты самого harness: стенд не нужен
-python -m pytest examples/api                # примеры API на вашем стенде
+source .venv/bin/activate                    # Windows: .venv\Scripts\activate
+python -m pip install -r requirements/requirements.txt
+python -m playwright install chromium       # только для UI
+cp .env.example .env
 ```
 
-## Слои: что установить и что можно удалить
+Заполните `.env`. Секреты не добавляйте в Git.
 
-Профили лежат в `requirements/`, каждый включает базовый. Версии зафиксированы в
-`requirements/constraints.txt`: на них проходят тесты harness, повторная установка даёт то же окружение.
-Для всех профилей используйте Python 3.12+: закреплённые NumPy 2.5.4 и pyee 14.0.0 требуют
-как минимум эту версию. Так слои можно добавлять в существующее окружение без смены Python.
-Слои без установленных зависимостей при запуске `examples` не собираются — это видно в шапке вывода pytest.
+## Настройка
 
-| Нужен слой | Что установить | Если слой не нужен, можно удалить |
-|---|---|---|
-| API (всегда) | `pip install -r requirements/base.txt` | — |
-| БД (PostgreSQL) | `pip install -r requirements/db.txt` | `clients/db.py`, `examples/db/`, фикстуры `app_db`, `created_project`, `created_order` в `examples/conftest.py` |
-| UI (браузер) | `pip install -r requirements/ui.txt`, затем `python -m playwright install chromium` | `clients/browser.py`, `examples/ui/` |
-| DQ (Excel-отчёты) | `pip install -r requirements/dq.txt` | `checks/excel.py`, `examples/dq_reports/`, `tests/test_excel.py` |
-| Vault (секреты) | `pip install -r requirements/vault.txt`, `SECRETS_SOURCE=vault` | `_read_vault` в `config.py`, блок Vault в `.env.example` |
-| Всё сразу, разработка harness | `pip install -r requirements/dev.txt` (или `requirements.txt`) | — |
+Настройки разложены по назначению:
 
-Профили складываются: `pip install -r requirements/db.txt -r requirements/ui.txt`.
-UI-пример «проект из БД виден в списке» использует фикстуру `created_project` — ему нужен и профиль БД.
+| Где | Что менять |
+|---|---|
+| `.env` | адреса, токены, логины, пароли, окружение |
+| `conftest.py` | включённые слои `qa.layers.*` |
+| `tests/conftest.py` | клиенты систем, авторизация, создание и удаление тестовых данных |
+| `tests/<слой>/test_*.py` | URL методов, SQL, ожидаемые поля и бизнес-правила |
+| `tests/ui/pages/` | локаторы и действия страниц |
 
-**UI на Linux.** Браузеру нужны системные библиотеки. На чистой машине или в CI ставьте браузер вместе с ними:
-`python -m playwright install --with-deps chromium` (нужны права root/sudo; поддерживаются Debian и Ubuntu).
-В Docker проще взять готовый образ `mcr.microsoft.com/playwright/python` той же версии, что в constraints.
+Минимальный `.env`:
 
-## Что где лежит
+```dotenv
+TEST_ENV=stage
+SECRETS_SOURCE=env
+
+STAGE_APP_API_URL=https://app-stage.example.com
+STAGE_APP_API_TOKEN=
+STAGE_APP_DB_HOST=
+STAGE_APP_DB_PORT=5432
+STAGE_APP_DB_NAME=
+STAGE_APP_DB_USER=
+STAGE_APP_DB_PASSWORD=
+STAGE_APP_FRONTEND_URL=https://app-stage.example.com
+STAGE_APP_FRONTEND_LOGIN=
+STAGE_APP_FRONTEND_PASSWORD=
+```
+
+Полный список параметров находится в `.env.example`.
+
+## Как всё связано
+
+```mermaid
+flowchart TD
+    ENV[".env<br/>адреса и секреты"] --> FIX["tests/conftest.py<br/>клиенты и тестовые данные"]
+    ROOT["conftest.py<br/>подключение слоёв"] --> LAYERS["qa/layers/<br/>API · DB · UI · DQ · Vault"]
+    BASE["qa/base/<br/>config · checks · report · data"] --> LAYERS
+    HOOKS["qa/hooks/<br/>pytest и Allure"] --> RUN["pytest"]
+    LAYERS --> FIX
+    FIX --> TESTS["tests/<br/>примеры и рабочие тесты"]
+    BASE --> TESTS
+    TESTS --> RUN
+    RUN --> OUT["artifacts/<br/>лог и allure-results"]
+```
+
+Структура файлов:
 
 ```text
-AGENTS.md               правила написания тестов: примеры, значения, фикстуры, тестовые данные
-config.py               окружение (TEST_ENV), секреты (ACTIVE_CONFIG), папка артефактов запуска (RUN_DIR)
-conftest.py             общее для всех тестов: артефакты, логи, маркеры по папке, обязательный итог проверок
-pytest.ini              маркеры, форматы логов; без пути pytest запускает tests/
-report.py               @step — шаг Allure для проверок и страниц: не сохраняет аргументы, красит проваленную проверку
-requirements/           профили зависимостей по слоям и constraints.txt с проверенными версиями
-clients/                транспорт, по файлу на клиент; каждый запрос — шаг Allure с вложением
-  http.py               HttpClient: base_url, заголовки, лог и шаг запроса без секретов, get_json(), download()
-  odata.py              OdataClient: get_response() проверяет структуру ответа, get_items() — записи из value
-  db.py                 PostgresClient: fetch_all() — строки словарями, execute()
-  browser.py            BasePage и BaseElement для Page Object: каждое действие — шаг Allure
-checks/                 проверки, по файлу на тему
-  base.py               Checker: копит ошибки, красный шаг на каждую ошибку, итог в with/assert_valid()
-  odata.py              OdataChecker: $select, $filter, $top, $skip, $count, $expand, $orderby, записи теста
-  excel.py              ExcelChecker: колонки, даты, числа, проценты, списки, дубликаты, расчёт стоимости
-examples/               примеры: копируйте и меняйте под свою систему
-  conftest.py           клиенты систем (app_api, app_db, crm_api) и тестовые данные в БД
-  api/                  OData API и обычный REST API; create_order — тестовые заказы через API
-  db/                   запрос ищет нарушения, тест проверяет, что их нет; тест с тестовыми данными
-  dq_reports/           Excel-отчёт: скачать один раз на файл, проверить колонки и бизнес-правила
-  ui/                   Page Object; page — без входа, auth_page — вход один раз на запуск
-tests/                  тесты самого harness: корректные данные проходят, нарушения находятся
+qa/
+├── base/                 общие настройки, проверки, отчёт, данные
+├── hooks/                pytest-хуки
+└── layers/               API, OData, DB, UI, DQ, Vault
+
+tests/
+├── conftest.py           фикстуры систем и тестовых данных
+├── api/                  REST и OData
+├── db/                   PostgreSQL
+├── ui/                   Playwright и pages/
+└── dq/                   Excel-отчёты
+
+requirements/             профили зависимостей
 ```
-
-## Как устроен тест
-
-1. **Клиент — фикстура по имени.** Тест не создаёт клиентов и не читает секреты, он просит фикстуру:
-   `def test_orders(self, app_api, app_db):`. Фикстуры систем — в `examples/conftest.py`.
-2. **Проверки копятся.** Проверки идут внутри `with OdataChecker() as checker:`, по одной на строку.
-   Проваленная проверка — красный шаг в Allure, следующие выполняются; на выходе из `with` тест падает
-   одним сообщением обо всех ошибках. Если `with` (или `checker.assert_valid()`) забыли, тест всё равно
-   упадёт — это проверяет корневой `conftest.py`. В DQ-тестах `checker` — фикстура: `with checker:`.
-3. **Один файл — одна тема** (эндпоинт, таблицы, отчёт, страница). Внутри класс `Test<Тема>` с метками
-   `@allure.epic` и `@allure.feature`, у каждого теста `@allure.title`. Имя файла — `test_<слой>_<тема>.py`:
-   имена файлов не должны повторяться в разных папках.
-4. **Данные создаёт тест.** Создать до теста и удалить после — фикстура с `yield` (`create_order`
-   в `examples/api/conftest.py`, `created_project` в `examples/conftest.py`). Тестовые данные называются
-   `qa_autotest-...`. Правила — в [AGENTS.md](AGENTS.md#тестовые-данные).
-
-```python
-@allure.epic("API")
-@allure.feature("/api/v1/orders")
-class TestOrders:
-
-    @allure.title("$filter по статусу")
-    def test_filter_by_status(self, app_api, create_order):
-        draft = create_order(Status="Draft")
-        closed = create_order(Status="Closed")
-
-        items = app_api.get_items("/api/v1/orders", {"$filter": "Status eq 'Draft'"})
-
-        with OdataChecker() as checker:
-            checker.check_filter_eq(items, "Status", "Draft")
-            checker.check_has_record(items, "Id", draft["Id"])
-            checker.check_no_record(items, "Id", closed["Id"])
-```
-
-## Шаги отчёта
-
-Методы-шаги (проверки, действия страниц) помечаются декоратором `@step("Заголовок {аргумент}")` из `report.py`,
-а не `@allure.step`: `@allure.step` сохраняет все аргументы метода в файлы отчёта — пароль, целый ответ,
-таблицу Excel. `@step` пишет только заголовок, а для проверок Checker'а ещё и отмечает шаг красным,
-хотя ошибка копится, а не роняет тест сразу. Для блока внутри метода или фикстуры —
-`with allure.step("..."):`, он аргументов не сохраняет.
-
-## Как расширять
-
-- **Новая система** — фикстура `<система>_<клиент>` в `conftest.py` рядом с тестами по образцу `app_api`,
-  секреты — в `.env` с префиксом окружения (`STAGE_<СИСТЕМА>_URL`) и в `.env.example`.
-- **Новый клиент** (websocket, kafka, s3…) — файл в `clients/`: класс с понятными методами, без адресов
-  и секретов внутри — их передаёт фикстура. Клиент необязательного слоя импортируйте внутри фикстуры
-  и добавьте папку слоя в `LAYER_REQUIREMENTS` в `examples/conftest.py`.
-- **Новая проверка** — метод `check_<что>` в классе своей темы с декоратором `@step("Заголовок {аргумент}")`:
-  при ошибке `self.fail("текст")`, в конце `return self`. Добавьте тест в `tests/`: корректные данные проходят, нарушение находится.
-- **Новая тема проверок** — файл `checks/<тема>.py` с классом `<Тема>Checker(Checker)`.
-- **Новая зависимость** — в профиль `requirements/<слой>.txt` и точная версия в `requirements/constraints.txt`.
 
 ## Запуск
 
 ```bash
-python -m pytest                                   # тесты harness (стенд не нужен)
-python -m pytest examples                          # все примеры
-python -m pytest examples -m "api or db"           # по маркерам: api, db, ui, dq (ставятся по папке)
-TEST_ENV=dev python -m pytest examples/db          # другое окружение
-python -m pytest examples/ui --headed              # UI с окном браузера; в CI — HEADLESS=true
-python -m pytest examples/ui --tracing retain-on-failure   # trace упавших UI-тестов
-APP_VERSION=1.4.2 python -m pytest examples        # версия тестируемого приложения — в отчёт Allure
+python -m pytest --collect-only -q             # проверить сборку
+python -m pytest                               # все тесты
+python -m pytest tests/api                     # один слой
+python -m pytest tests/api/test_api_order_create.py
+python -m pytest -m "api or db"                # несколько слоёв
+TEST_ENV=dev python -m pytest tests/db          # другое окружение
+python -m pytest tests/ui --headed              # UI с окном
 ```
 
-## Артефакты и отчёт
+Результаты сохраняются в `artifacts/<дата>_<окружение>/`.
 
-Всё, что создаёт запуск, складывается в отдельную папку `artifacts/<дата-время>_<окружение>/`
-(в git не попадает; путь печатается в шапке вывода pytest):
+## Примеры
 
-```text
-pytest.log          лог DEBUG: запросы, тела ответов без секретов, строки STEP: ... шагов Allure
-allure-results/     результаты Allure: allure serve artifacts/<запуск>/allure-results
-playwright/         скриншоты и trace упавших UI-тестов (--screenshot, --tracing)
-dq_reports/         скачанные DQ-отчёты (KEEP_DQ_REPORTS=false — не хранить, DQ_REPORTS_OUTPUT_DIR — другая папка)
-```
+| Задача | Файл |
+|---|---|
+| REST API | `tests/api/test_api_crm_clients.py` |
+| OData | `tests/api/test_api_odata_orders.py` |
+| Создание и удаление через API | `tests/api/test_api_order_create.py` |
+| PostgreSQL | `tests/db/test_db_orders.py` |
+| UI | `tests/ui/test_ui_login.py`, `tests/ui/test_ui_projects.py` |
+| Excel | `tests/dq/test_dq_orders_report.py` |
 
-Очистка — `rm -rf artifacts`. Корень меняет `ARTIFACTS_DIR`, отдельные пути — ключи `--alluredir`,
-`--log-file`, `--output`.
-
-Что видно в отчёте Allure:
-
-- **API** — шаг на каждый запрос: метод, адрес, статус, длительность, тело запроса и ответ (секреты — `***`);
-- **БД** — шаг на каждый запрос: текст, параметры, число строк и первые 20 строк;
-- **UI** — шаг на каждое действие; при падении — скриншот и адрес каждой страницы теста;
-- **DQ** — шаг на правило: сколько строк из скольких нарушают, номера строк и примеры значений;
-- **запуск** (вкладка Environment) — окружение, `APP_VERSION`, коммит harness, версия Python.
-
-HTTP-вложения содержат очищенные JSON и URL-encoded формы. Тела остальных форматов
-заменяются пояснением, чтобы не сохранять секреты из произвольного текста или файлов.
-При ошибке запроса выводятся тип исключения и адрес с замаскированными секретами.
+Новый тест кладите в папку его слоя. Тест должен создавать свои данные и удалять их через
+фикстуру с `yield`. Проверки пишите внутри `with Checker() as checker:`.

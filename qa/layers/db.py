@@ -1,4 +1,6 @@
-"""Клиент PostgreSQL: соединение открывается на время одного запроса.
+"""Слой БД: PostgresClient — соединение открывается на время одного запроса. Профиль requirements/db.txt.
+
+    pytest_plugins = ["qa.hooks.common", "qa.layers.db", ...]
 
     db = PostgresClient(host=..., port=..., dbname=..., user=..., password=...)
     rows = db.fetch_all("SELECT id, title FROM projects WHERE title = %s", [title])
@@ -7,10 +9,23 @@
 
 Значения передавайте вторым аргументом (``%s``), а не f-строкой: так psycopg2 сам их экранирует.
 Каждый запрос — шаг Allure с вложением: текст запроса, параметры, число строк и первые строки.
+
+Модуль не знает адресов, таблиц и SQL: клиент базы создаёт фикстура в conftest.py рядом с тестами,
+запросы пишет тест.
+
+    @pytest.fixture(scope="session")
+    def app_db():
+        from qa.layers.db import PostgresClient
+        return PostgresClient(host=ACTIVE_CONFIG["app_db_host"], ...)
 """
 
 from __future__ import annotations
 
+from qa.base.config import require
+
+require(__name__, "db", "psycopg2")
+
+# Остальные импорты — после проверки: без зависимостей ошибка называет профиль, а не модуль.
 import pprint
 import textwrap
 from collections.abc import Sequence
@@ -20,6 +35,7 @@ from typing import Any
 import allure
 import psycopg2
 from psycopg2.extras import RealDictCursor
+
 
 MAX_ATTACHED_ROWS = 20  # сколько строк результата приложить к шагу
 

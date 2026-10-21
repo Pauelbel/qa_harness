@@ -1,6 +1,6 @@
 """Тестовые данные: общие помощники для фикстур, которые создают записи.
 
-    from core.data import unique_title
+    from qa.base.data import unique_title
     project = {"id": str(uuid.uuid4()), "title": unique_title()}
 """
 

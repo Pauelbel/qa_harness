@@ -1,8 +1,13 @@
-"""Пример UI-тестов с Page Object: пользователь уже вошёл (фикстура auth_page из examples/ui/conftest.py)."""
+"""Когда брать: UI-тест, где пользователь уже вошёл, в том числе с предусловием в БД.
+
+auth_page — страница вошедшего пользователя (плагин ui; вход — фикстура ui_login из tests/conftest.py).
+created_project — проект в БД на время теста (tests/conftest.py, нужен и плагин db).
+Проверки UI — методы check_* страницы: они ждут нужного состояния и сразу роняют тест, Checker не нужен.
+"""
 
 import allure
 
-from examples.ui.pages.projects_page import ProjectsPage
+from tests.ui.pages.projects_page import ProjectsPage
 
 
 # ------------------------------------------------------------------------

@@ -1,13 +1,13 @@
-"""Пример API-тестов обычного REST API: JSON-ответ и его схема.
+"""Когда брать: GET обычного REST API (не OData) — проверить схему JSON-ответа и его содержимое.
 
-crm_api — HttpClient второй системы (фикстура из examples/conftest.py).
+crm_api — HttpClient второй системы (фикстура из tests/conftest.py).
 Проверки идут внутри ``with Checker() as checker:``: на выходе тест падает одним сообщением обо всех ошибках.
 """
 
 import allure
 from pydantic import BaseModel
 
-from checks.base import Checker
+from qa.base.checks import Checker
 
 ENDPOINT = "/api/clients"
 

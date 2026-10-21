@@ -1,4 +1,9 @@
-"""Секреты из HashiCorp Vault: токен или AppRole, хранилища KV v1 и v2.
+"""Слой Vault: источник секретов ``SECRETS_SOURCE=vault``. Профиль requirements/vault.txt.
+
+    pytest_plugins = ["qa.hooks.common", ..., "qa.layers.vault"]
+
+Тесты не меняются: ACTIVE_CONFIG["app_api_token"] читает ключ APP_API_TOKEN из Vault
+(без префикса окружения). Токен или AppRole, хранилища KV v1 и v2.
 
 Адрес и путь: VAULT_ADDR, VAULT_MOUNT, VAULT_PATH. Слово {env} в пути заменяется на окружение.
 Вход: VAULT_TOKEN или пара VAULT_ROLE_ID и VAULT_SECRET_ID.
@@ -9,12 +14,17 @@
 
 from __future__ import annotations
 
+from qa.base.config import register_secret_source, require
+
+require(__name__, "vault", "hvac")
+
+# Остальные импорты — после проверки: без зависимостей ошибка называет профиль, а не модуль.
 import functools
 import os
 
 
 def read_secret(env: str, key: str) -> str | None:
-    """Источник секретов ``vault`` для core.config: значение ключа ``key`` или ``None``."""
+    """Источник секретов ``vault`` для qa.base.config: значение ключа ``key`` или ``None``."""
     return _read_vault(env).get(key)
 
 
@@ -43,3 +53,10 @@ def _read_vault(env: str) -> dict:
     except Exception as exc:
         # Ответ Vault может содержать секреты, поэтому показываем только тип ошибки.
         raise RuntimeError(f"Не удалось прочитать секрет Vault ({type(exc).__name__})") from None
+
+
+# ------------------------------------------------------------------------
+# Подключение: SECRETS_SOURCE=vault читает секреты через read_secret
+# ------------------------------------------------------------------------
+
+register_secret_source("vault", read_secret)

@@ -1,4 +1,6 @@
-"""HTTP-клиент с логом каждого запроса: общий для всех систем.
+"""Слой API: HttpClient — HTTP-клиент с логом каждого запроса, общий для всех систем. Профиль requirements/base.txt.
+
+    pytest_plugins = ["qa.hooks.common", "qa.layers.api", ...]
 
     api = HttpClient("https://api.example.com", headers={"Authorization": "Bearer ..."})
     data = api.get_json("/api/v1/orders", {"status": "draft"})   # JSON ответа, статус 200
@@ -10,10 +12,24 @@
 и поля JSON/форм (password, token, secret...) в логе и отчёте заменяются на ``***``.
 Заголовки и тела неизвестного формата не сохраняются. Ошибки транспорта записываются
 без исходного текста исключения, который может содержать адрес с секретами.
+
+Модуль не знает адресов и токенов: клиенты систем создаёт фикстура в conftest.py рядом с тестами.
+OData — в qa/layers/odata.py (OdataClient, OdataChecker).
+
+    @pytest.fixture(scope="session")
+    def app_api():
+        headers = {"Authorization": f"Bearer {ACTIVE_CONFIG['app_api_token']}"}
+        with OdataClient(ACTIVE_CONFIG["app_api_url"], headers=headers) as client:
+            yield client
 """
 
 from __future__ import annotations
 
+from qa.base.config import require
+
+require(__name__, "base", "requests", "pydantic")
+
+# Остальные импорты — после проверки: без зависимостей ошибка называет профиль, а не модуль.
 import json
 import logging
 import re
@@ -301,3 +317,12 @@ def _filename(content_disposition: str) -> str | None:
         return unquote(encoded.group(1).strip())
     plain = re.search(r'filename=["\']?([^"\';]+)', content_disposition, re.IGNORECASE)
     return plain.group(1).strip() if plain else None
+
+
+# ------------------------------------------------------------------------
+# Хуки слоя: предупреждения о тестовых сертификатах не засоряют вывод
+# ------------------------------------------------------------------------
+
+def pytest_configure(config):
+    # Клиенты с verify=False (тестовые HTTPS-сертификаты) не засоряют вывод.
+    config.addinivalue_line("filterwarnings", "ignore::urllib3.exceptions.InsecureRequestWarning")
