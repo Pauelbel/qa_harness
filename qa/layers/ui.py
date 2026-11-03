@@ -17,6 +17,11 @@ Page Object: элемент знает своё имя для отчёта, ст
 Методы страниц — с декоратором ``@step`` из qa/base/report.py, а не ``@allure.step``:
 он не сохраняет аргументы (пароль) в файлы отчёта.
 
+Пароль и токен вводите через ``fill(значение, secret=True)``: при падении шага исходная ошибка
+Playwright с введённым значением не попадает в traceback. Аргумент самого метода страницы
+pytest показывает при ``--tb=long``, поэтому метод входа лучше читает пароль из ACTIVE_CONFIG сам,
+а не принимает его параметром.
+
 Браузер даёт pytest-playwright. Фикстуры для тестов:
     page       — страница без входа (стандартная фикстура pytest-playwright);
     auth_page  — страница, где пользователь уже вошёл: вход выполняется один раз на запуск
@@ -71,22 +76,28 @@ from qa.base import config as harness_config
 # ------------------------------------------------------------------------
 
 @contextmanager
-def _allure_step(title: str, timeout_ms: float) -> Generator[None, None, None]:
-    """Шаг Allure; ошибка Playwright превращается в понятное падение с вложением «Ошибка»."""
+def _allure_step(title: str, timeout_ms: float, hide_cause: bool = False) -> Generator[None, None, None]:
+    """Шаг Allure; ошибка Playwright превращается в понятное падение с вложением «Ошибка».
+
+    ``hide_cause`` — не прикладывать исходное исключение: в его traceback pytest показывает
+    аргументы вызова Playwright, например введённый пароль.
+    """
     with allure.step(title):
         try:
             yield
         except PlaywrightTimeoutError as error:
-            _fail(f"{title}: не дождались за {timeout_ms / 1000:g} с.", error)
+            _fail(f"{title}: не дождались за {timeout_ms / 1000:g} с.", error, hide_cause)
         except AssertionError as error:  # проверка expect(...) не прошла
-            _fail(f"{title}: проверка не прошла.", error)
+            _fail(f"{title}: проверка не прошла.", error, hide_cause)
         except PlaywrightError as error:  # например, локатор нашёл несколько элементов
-            _fail(f"{title}: ошибка Playwright.", error)
+            _fail(f"{title}: ошибка Playwright.", error, hide_cause)
 
 
-def _fail(message: str, error: Exception) -> NoReturn:
+def _fail(message: str, error: Exception, hide_cause: bool = False) -> NoReturn:
     details = f"{message}\n{error}"
     allure.attach(details, name="Ошибка", attachment_type=allure.attachment_type.TEXT)
+    if hide_cause:
+        raise AssertionError(details) from None
     raise AssertionError(details) from error
 
 
@@ -100,9 +111,9 @@ class BaseElement:
         self.name = name
         self.timeout = timeout * 1000  # мс: Playwright ждёт в миллисекундах
 
-    def _step(self, action: str):
+    def _step(self, action: str, hide_cause: bool = False):
         """Шаг «<действие> → <имя элемента>» с обработкой ошибок."""
-        return _allure_step(f"{action} → {self.name}", self.timeout)
+        return _allure_step(f"{action} → {self.name}", self.timeout, hide_cause)
 
     # ------------------------------------------------------------------------
     # Действия: Playwright сам ждёт, пока элемент станет видимым и доступным
@@ -112,8 +123,10 @@ class BaseElement:
         with self._step("Клик"):
             self.locator.click(timeout=self.timeout)
 
-    def fill(self, text: str) -> None:
-        with self._step("Ввод текста"):
+    def fill(self, text: str, secret: bool = False) -> None:
+        """``secret=True`` — пароль, токен: значение не попадает ни в шаг, ни в traceback падения."""
+        __tracebackhide__ = True  # аргумент text — значение поля, в том числе пароль
+        with self._step("Ввод текста", hide_cause=secret):
             self.locator.fill(text, timeout=self.timeout)
 
     def press_key(self, key: str) -> None:
@@ -152,6 +165,16 @@ class BaseElement:
     def check_disabled(self) -> None:
         with self._step("Проверка: недоступен"):
             expect(self.locator).to_be_disabled(timeout=self.timeout)
+
+    def check_editable(self) -> None:
+        """Поле можно редактировать: не disabled и не readonly."""
+        with self._step("Проверка: редактируется"):
+            expect(self.locator).to_be_editable(timeout=self.timeout)
+
+    def check_not_editable(self) -> None:
+        """Поле нельзя редактировать: disabled или readonly."""
+        with self._step("Проверка: не редактируется"):
+            expect(self.locator).not_to_be_editable(timeout=self.timeout)
 
     def check_have_text(self, text: str) -> None:
         """Текст элемента совпадает целиком."""
@@ -225,8 +248,9 @@ VIEWPORT = {"width": 1920, "height": 1080}
 # Свой путь задаётся ключом --output
 # ------------------------------------------------------------------------
 
-@pytest.hookimpl(tryfirst=True)
+@pytest.hookimpl(trylast=True)  # после qa.hooks.common: RUN_DIR считается от корня запуска, а не от cwd
 def pytest_configure(config):
+    # pytest-playwright читает --output только в фикстурах, поэтому позднего хука достаточно.
     if getattr(config.option, "output", None) == "test-results":  # значение по умолчанию pytest-playwright
         config.option.output = str(harness_config.RUN_DIR / "playwright")
 

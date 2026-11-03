@@ -47,6 +47,7 @@ def step(title: str) -> Callable[[F], F]:
 
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
+            __tracebackhide__ = True  # args — аргументы метода, в том числе пароль: в traceback не показываем
             bound = signature.bind(*args, **kwargs)
             bound.apply_defaults()
             step_title = title.format_map({name: _short(value) for name, value in bound.arguments.items()})
