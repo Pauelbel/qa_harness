@@ -26,7 +26,7 @@ class LoginPage(BasePage):
     @step("Авторизация пользователя {username}")  # @step не сохраняет аргументы: пароля в отчёте нет
     def login_user(self, username: str, password: str):
         self.element("Поле «Логин»", USERNAME).fill(username)
-        self.element("Поле «Пароль»", PASSWORD).fill(password)
+        self.element("Поле «Пароль»", PASSWORD).fill(password, secret=True)
         self.element("Кнопка «Войти»", SIGN_IN_BTN).click()
 
     # ------------------------------------------------------------------------
