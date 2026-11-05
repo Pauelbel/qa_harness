@@ -2,6 +2,7 @@
 
     артефакты запуска    лог, Allure — в RUN_DIR (папка в корне запуска, см. qa/base/config.py)
     лог шагов            каждый шаг Allure — строка STEP: ... в логе
+    шаг окружения        первый шаг каждого теста — «Окружение: stage»
     итог проверок        забытый with или assert_valid() не скрывает ошибки Checker
     маркеры по папке     api, db, ui, dq — по имени папки теста, выбор слоя через pytest -m
     папки слоёв          папка слоя, чей модуль не подключён, не собирается
@@ -15,6 +16,7 @@ import os
 import platform
 import subprocess
 
+import allure
 import allure_commons
 import pytest
 
@@ -113,6 +115,8 @@ def pytest_runtest_setup(item):
 
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_call(item):
+    with allure.step(f"Окружение: {harness_config.CURRENT_ENV}"):  # первый шаг теста в отчёте
+        pass
     result = yield  # тест уже упал — его ошибку не подменяем
     errors = checks.unreported_errors()
     if errors:

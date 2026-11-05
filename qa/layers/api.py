@@ -58,7 +58,7 @@ class HttpClient(requests.Session):
     ``verify=False`` — не проверять HTTPS-сертификат (тестовые стенды).
     """
 
-    def __init__(self, base_url: str = "", headers: dict | None = None, verify: bool | str = True) -> None:
+    def __init__(self, base_url: str = "", headers: dict | None = None, verify: bool | str = False) -> None:
         super().__init__()
         self.base_url = base_url.rstrip("/")
         self.headers.update(headers or {})
