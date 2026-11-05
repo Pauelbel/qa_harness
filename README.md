@@ -6,6 +6,15 @@
 
 Нужен Python 3.12+.
 
+Клонируйте репозиторий и перейдите в его папку:
+
+```bash
+git clone https://github.com/Pauelbel/qa_harness.git
+cd qa_harness
+```
+
+Остальные команды выполняйте из этой папки: рядом лежит `pytest.ini`, и отсюда читается `.env`.
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate                    # Windows: .venv\Scripts\activate
@@ -94,6 +103,58 @@ python -m pytest tests/ui --headed              # UI с окном
 ```
 
 Результаты сохраняются в `artifacts/<дата>_<окружение>/`.
+
+## Отчёт Allure
+
+Каждый запуск создаёт свою папку:
+
+```text
+artifacts/20261105-154119_stage/
+├── pytest.log            лог запуска
+└── allure-results/       сырые результаты для отчёта
+```
+
+`allure-results` — это JSON-файлы, а не готовый отчёт. Отчёт из них строит Allure CLI.
+Для него нужна Java 8+; установка — `brew install allure`, `scoop install allure`
+или архив со [страницы релизов](https://github.com/allure-framework/allure2/releases).
+Проверка: `allure --version`.
+
+Свою папку результатов можно задать при запуске:
+
+```bash
+python -m pytest --alluredir=allure-results
+```
+
+Ниже `RESULTS` — путь к папке `allure-results` нужного запуска:
+
+```bash
+RESULTS=artifacts/20261105-154119_stage/allure-results
+```
+
+Открыть отчёт сразу в браузере (временный, без сохранения):
+
+```bash
+allure serve $RESULTS
+```
+
+Сохранить отчёт в папку и открыть его:
+
+```bash
+allure generate $RESULTS -o allure-report --clean    # --clean перезаписывает старый отчёт
+allure open allure-report
+```
+
+Папку `allure-report` нельзя открыть двойным щелчком по `index.html`: браузер не загрузит
+данные с диска. Открывайте её через `allure open` или веб-сервер.
+
+Отчёт одним HTML-файлом (удобно отправить или приложить к задаче):
+
+```bash
+allure generate $RESULTS -o allure-report --clean --single-file
+```
+
+Получится `allure-report/index.html`, который открывается в браузере без сервера.
+Ключ `--single-file` есть в Allure 2.24 и новее.
 
 ## Примеры
 
