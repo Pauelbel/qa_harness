@@ -2,6 +2,7 @@
 
     артефакты запуска    лог, Allure — в RUN_DIR (папка в корне запуска, см. qa/base/config.py)
     лог шагов            каждый шаг Allure — строка STEP [stage]: ... в логе
+    путь шагов           текст падения UI-шага начинается с открытых шагов (qa/base/report.py)
     итог проверок        забытый with или assert_valid() не скрывает ошибки Checker
     маркеры по папке     api, db, ui, dq — по имени папки теста, выбор слоя через pytest -m
     папки слоёв          папка слоя, чей модуль не подключён, не собирается
@@ -18,7 +19,7 @@ import subprocess
 import allure_commons
 import pytest
 
-from qa.base import checks, config as harness_config
+from qa.base import checks, config as harness_config, report
 
 
 # ------------------------------------------------------------------------
@@ -45,6 +46,7 @@ def pytest_configure(config):
 
     logging.getLogger("urllib3").setLevel(logging.WARNING)  # без шума от requests
     allure_commons.plugin_manager.register(StepsToLog())
+    allure_commons.plugin_manager.register(report.StepStack())  # путь шагов в тексте ошибки
 
 
 def pytest_sessionstart(session):

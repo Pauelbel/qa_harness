@@ -18,9 +18,11 @@ from __future__ import annotations
 import functools
 import inspect
 from collections.abc import Callable
+from contextvars import ContextVar
 from typing import Any, TypeVar
 
 import allure
+import allure_commons
 
 MAX_TITLE_VALUE = 80  # длина значения аргумента в заголовке шага
 
@@ -73,6 +75,34 @@ def step(title: str) -> Callable[[F], F]:
         return wrapper  # type: ignore[return-value]
 
     return decorator
+
+
+# ------------------------------------------------------------------------
+# Стек шагов: какие шаги Allure сейчас открыты — для текста ошибки
+# Плагин регистрирует qa/hooks/common.py; без него стек пуст
+# ------------------------------------------------------------------------
+
+_OPEN_STEPS: ContextVar[tuple[tuple[str, str], ...]] = ContextVar("qa_open_steps", default=())
+
+
+def current_steps() -> list[str]:
+    """Заголовки открытых шагов Allure, от внешнего к внутреннему."""
+    return [title for _, title in _OPEN_STEPS.get()]
+
+
+class StepStack:
+    """Плагин allure_commons: запоминает открытые шаги (``@step``, ``allure.step``, шаги элементов)."""
+
+    @allure_commons.hookimpl
+    def start_step(self, uuid, title, params):
+        _OPEN_STEPS.set((*_OPEN_STEPS.get(), (uuid, title)))
+
+    @allure_commons.hookimpl
+    def stop_step(self, uuid, exc_type, exc_val, exc_tb):
+        steps = _OPEN_STEPS.get()
+        ids = [step_id for step_id, _ in steps]
+        if uuid in ids:  # закрываем шаг и всё, что осталось открытым внутри него
+            _OPEN_STEPS.set(steps[: ids.index(uuid)])
 
 
 # ------------------------------------------------------------------------

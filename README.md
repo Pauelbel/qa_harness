@@ -85,7 +85,8 @@ tests/
 ├── api/                  REST и OData
 ├── db/                   PostgreSQL
 ├── ui/                   Playwright и pages/
-└── dq/                   Excel-отчёты
+├── dq/                   Excel-отчёты
+└── core/                 тесты самого ядра: локальная страница, без сети и стендов
 
 requirements/             профили зависимостей
 ```
@@ -100,7 +101,12 @@ python -m pytest tests/api/test_api_order_create.py
 python -m pytest -m "api or db"                # несколько слоёв
 TEST_ENV=dev python -m pytest tests/db          # другое окружение
 python -m pytest tests/ui --headed              # UI с окном
+python -m pytest tests/core                     # тесты ядра: без стендов, нужен только Chromium
 ```
+
+Падение UI-шага в консоли — одна строка с путём шагов и причиной:
+`Открыть окно «Замещение» → Клик → Кнопка «Сохранить»: не дождались за 20 с.`
+В Allure — дерево шагов, скриншот, адрес страницы и trace Playwright (`playwright show-trace`).
 
 Результаты сохраняются в `artifacts/<дата>_<окружение>/`.
 

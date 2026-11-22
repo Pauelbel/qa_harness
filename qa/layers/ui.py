@@ -44,10 +44,16 @@ pytest показывает при ``--tb=long``, поэтому метод вх
             login_page.check_logged_in()
         return login
 
-При падении к отчёту Allure прикладываются скриншот и адрес каждой страницы теста.
-Ключи запуска: --headed (показать окно), --browser firefox, --tracing retain-on-failure
-(trace упавших тестов — в RUN_DIR/playwright). В trace видны введённые значения, в том числе пароль:
+При падении шага текст ошибки начинается с пути шагов, внутренние кадры ядра скрыты из traceback:
+    Добавить замещающего Иванов И.И. → Клик → Кнопка «Добавить»: не дождались за 20 с.
+Локатор, который нашёл несколько элементов: «…: найдено 3 элементов, ожидался 1.»
+
+При падении к отчёту Allure прикладываются скриншот и адрес каждой страницы теста, а после
+закрытия браузера — trace Playwright (вложение «trace», RUN_DIR/playwright): по умолчанию
+--tracing retain-on-failure, явный --tracing off или on важнее. Открыть trace:
+``playwright show-trace trace.zip``. В trace видны введённые значения, в том числе пароль:
 не публикуйте trace из CI без необходимости.
+Ключи запуска: --headed (показать окно), --browser firefox.
 """
 
 from __future__ import annotations
@@ -59,8 +65,7 @@ require(__name__, "ui", "playwright", "pytest_playwright")
 # Остальные импорты — после проверки: без зависимостей ошибка называет профиль, а не модуль.
 import os
 import re
-from collections.abc import Generator
-from contextlib import contextmanager
+import shlex
 from typing import NoReturn
 
 import allure
@@ -70,35 +75,72 @@ from playwright.sync_api import Locator, Page, expect
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from qa.base import config as harness_config
+from qa.base.report import current_steps
 
 # ------------------------------------------------------------------------
 # Шаги браузера: ошибки Playwright превращаются в AssertionError с вложением
 # ------------------------------------------------------------------------
 
-@contextmanager
-def _allure_step(title: str, timeout_ms: float, hide_cause: bool = False) -> Generator[None, None, None]:
+STRICT_VIOLATION = re.compile(r"strict mode violation: .* resolved to (\d+) elements")
+
+
+class _allure_step:  # noqa: N801 — используется как функция: with _allure_step(...)
     """Шаг Allure; ошибка Playwright превращается в понятное падение с вложением «Ошибка».
 
-    ``hide_cause`` — не прикладывать исходное исключение: в его traceback pytest показывает
-    аргументы вызова Playwright, например введённый пароль.
+    Класс, а не @contextmanager: кадры contextlib нельзя скрыть из traceback.
+    ``hide_cause`` оставлен для совместимости: исходное исключение не прикладывается никогда —
+    его текст уже в сообщении, а его traceback — внутренности Playwright и аргументы вызова (пароль).
     """
-    with allure.step(title):
+
+    def __init__(self, title: str, timeout_ms: float, hide_cause: bool = False) -> None:
+        self.title = title
+        self.timeout_ms = timeout_ms
+        self.step = allure.step(title)
+
+    def __enter__(self) -> None:
+        self.step.__enter__()
+
+    def __exit__(self, exc_type, error, tb) -> bool:
+        __tracebackhide__ = True
+        if error is None:
+            self.step.__exit__(None, None, None)
+            return False
         try:
-            yield
-        except PlaywrightTimeoutError as error:
-            _fail(f"{title}: не дождались за {timeout_ms / 1000:g} с.", error, hide_cause)
-        except AssertionError as error:  # проверка expect(...) не прошла
-            _fail(f"{title}: проверка не прошла.", error, hide_cause)
-        except PlaywrightError as error:  # например, локатор нашёл несколько элементов
-            _fail(f"{title}: ошибка Playwright.", error, hide_cause)
+            _raise_readable(self.title, self.timeout_ms, error)
+        except AssertionError as readable:
+            # шаг Allure закрывается понятной ошибкой: статус failed (красный), а не broken
+            self.step.__exit__(type(readable), readable, readable.__traceback__)
+            raise
+        self.step.__exit__(exc_type, error, tb)  # не ошибка Playwright — как есть
+        return False
 
 
-def _fail(message: str, error: Exception, hide_cause: bool = False) -> NoReturn:
+def _raise_readable(title: str, timeout_ms: float, error: BaseException) -> None:
+    """Ошибку Playwright или expect — в AssertionError с путём шагов; остальные пропускаем как есть."""
+    __tracebackhide__ = True
+    if getattr(error, "qa_readable", False):  # уже понятная ошибка вложенного шага
+        return
+    strict = STRICT_VIOLATION.search(str(error))
+    if strict and isinstance(error, (PlaywrightError, AssertionError)):
+        _fail(f"{title}: найдено {strict.group(1)} элементов, ожидался 1.", error)
+    if isinstance(error, PlaywrightTimeoutError):
+        _fail(f"{title}: не дождались за {timeout_ms / 1000:g} с.", error)
+    if isinstance(error, AssertionError):  # проверка expect(...) не прошла
+        _fail(f"{title}: проверка не прошла.", error)
+    if isinstance(error, PlaywrightError):
+        _fail(f"{title}: ошибка Playwright.", error)
+
+
+def _fail(message: str, error: BaseException) -> NoReturn:
+    __tracebackhide__ = True
+    path = current_steps()[:-1]  # последний — шаг самого действия, он уже в message
+    if path:
+        message = " → ".join(path) + " → " + message
     details = f"{message}\n{error}"
     allure.attach(details, name="Ошибка", attachment_type=allure.attachment_type.TEXT)
-    if hide_cause:
-        raise AssertionError(details) from None
-    raise AssertionError(details) from error
+    failure = AssertionError(details)
+    failure.qa_readable = True  # внешний _allure_step не переписывает текст
+    raise failure from None
 
 
 # ------------------------------------------------------------------------
@@ -120,6 +162,7 @@ class BaseElement:
     # ------------------------------------------------------------------------
 
     def click(self) -> None:
+        __tracebackhide__ = True
         with self._step("Клик"):
             self.locator.click(timeout=self.timeout)
 
@@ -131,18 +174,22 @@ class BaseElement:
 
     def press_key(self, key: str) -> None:
         """``Enter``, ``Escape``, ``ArrowDown``..."""
+        __tracebackhide__ = True
         with self._step(f"Нажатие {key}"):
             self.locator.press(key, timeout=self.timeout)
 
     def hover(self) -> None:
+        __tracebackhide__ = True
         with self._step("Наведение"):
             self.locator.hover(timeout=self.timeout)
 
     def get_text(self) -> str:
+        __tracebackhide__ = True
         with self._step("Чтение текста"):
             return self.locator.inner_text(timeout=self.timeout)
 
     def get_attribute(self, name: str) -> str | None:
+        __tracebackhide__ = True
         with self._step(f"Чтение атрибута {name}"):
             return self.locator.get_attribute(name, timeout=self.timeout)
 
@@ -151,52 +198,63 @@ class BaseElement:
     # ------------------------------------------------------------------------
 
     def check_visible(self) -> None:
+        __tracebackhide__ = True
         with self._step("Проверка: виден"):
             expect(self.locator).to_be_visible(timeout=self.timeout)
 
     def check_hidden(self) -> None:
+        __tracebackhide__ = True
         with self._step("Проверка: не виден"):
             expect(self.locator).to_be_hidden(timeout=self.timeout)
 
     def check_enabled(self) -> None:
+        __tracebackhide__ = True
         with self._step("Проверка: доступен"):
             expect(self.locator).to_be_enabled(timeout=self.timeout)
 
     def check_disabled(self) -> None:
+        __tracebackhide__ = True
         with self._step("Проверка: недоступен"):
             expect(self.locator).to_be_disabled(timeout=self.timeout)
 
     def check_editable(self) -> None:
         """Поле можно редактировать: не disabled и не readonly."""
+        __tracebackhide__ = True
         with self._step("Проверка: редактируется"):
             expect(self.locator).to_be_editable(timeout=self.timeout)
 
     def check_not_editable(self) -> None:
         """Поле нельзя редактировать: disabled или readonly."""
+        __tracebackhide__ = True
         with self._step("Проверка: не редактируется"):
             expect(self.locator).not_to_be_editable(timeout=self.timeout)
 
     def check_have_text(self, text: str) -> None:
         """Текст элемента совпадает целиком."""
+        __tracebackhide__ = True
         with self._step(f"Проверка: текст «{text}»"):
             expect(self.locator).to_have_text(text, timeout=self.timeout)
 
     def check_contain_text(self, text: str) -> None:
         """Текст элемента содержит подстроку."""
+        __tracebackhide__ = True
         with self._step(f"Проверка: содержит «{text}»"):
             expect(self.locator).to_contain_text(text, timeout=self.timeout)
 
     def check_have_value(self, value: str) -> None:
         """Значение поля ввода."""
+        __tracebackhide__ = True
         with self._step(f"Проверка: значение «{value}»"):
             expect(self.locator).to_have_value(value, timeout=self.timeout)
 
     def check_have_attribute(self, name: str, value: str) -> None:
+        __tracebackhide__ = True
         with self._step(f"Проверка: {name}=«{value}»"):
             expect(self.locator).to_have_attribute(name, value, timeout=self.timeout)
 
     def check_count(self, count: int) -> None:
         """Сколько элементов находит локатор (строки таблицы, пункты списка)."""
+        __tracebackhide__ = True
         with self._step(f"Проверка: количество {count}"):
             expect(self.locator).to_have_count(count, timeout=self.timeout)
 
@@ -222,6 +280,7 @@ class BasePage:
 
     def open(self, path: str = "/") -> None:
         """Открыть страницу; ``path`` считается от base_url браузера (его задаёт browser_context_args)."""
+        __tracebackhide__ = True
         with _allure_step(f"Открыть {path}", self.timeout * 1000):
             self.page.goto(path, timeout=self.timeout * 1000)
 
@@ -231,11 +290,13 @@ class BasePage:
 
     def check_url_contains(self, part: str, timeout: float = 20) -> None:
         """Адрес страницы содержит ``part`` (ждёт перехода до таймаута)."""
+        __tracebackhide__ = True
         with _allure_step(f"Проверка: адрес содержит «{part}»", timeout * 1000):
             expect(self.page).to_have_url(re.compile(re.escape(part)), timeout=timeout * 1000)
 
     def check_url_not_contains(self, part: str, timeout: float = 20) -> None:
         """Адрес страницы не содержит ``part`` (ждёт ухода со страницы до таймаута)."""
+        __tracebackhide__ = True
         with _allure_step(f"Проверка: адрес не содержит «{part}»", timeout * 1000):
             expect(self.page).not_to_have_url(re.compile(re.escape(part)), timeout=timeout * 1000)
 
@@ -253,6 +314,19 @@ def pytest_configure(config):
     # pytest-playwright читает --output только в фикстурах, поэтому позднего хука достаточно.
     if getattr(config.option, "output", None) == "test-results":  # значение по умолчанию pytest-playwright
         config.option.output = str(harness_config.RUN_DIR / "playwright")
+    # trace упавших тестов — по умолчанию; явный --tracing из командной строки важнее
+    if getattr(config.option, "tracing", None) == "off" and not _option_given(config, "--tracing"):
+        config.option.tracing = "retain-on-failure"
+
+
+def _option_given(config, option: str) -> bool:
+    """Ключ задан явно: в командной строке, в addopts из pytest.ini или в PYTEST_ADDOPTS."""
+    args = [
+        *config.invocation_params.args,
+        *config.getini("addopts"),
+        *shlex.split(os.environ.get("PYTEST_ADDOPTS", "")),
+    ]
+    return any(arg == option or arg.startswith(option + "=") for arg in args)
 
 
 # ------------------------------------------------------------------------
@@ -315,12 +389,15 @@ def auth_page(new_context, ui_storage_state) -> Page:
 
 
 # ------------------------------------------------------------------------
-# Отчёт при падении: прикладываем скриншот и адрес каждой открытой страницы
+# Отчёт при падении: прикладываем скриншот и адрес каждой открытой страницы,
+# после закрытия браузера — trace Playwright
 # ------------------------------------------------------------------------
 
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_makereport(item, call):
     report = yield
+    if report.when == "teardown":
+        _attach_traces(item, report)
     if report.when == "call" and report.failed:
         for name, value in getattr(item, "funcargs", {}).items():
             if isinstance(value, Page) and not value.is_closed():
@@ -334,3 +411,19 @@ def pytest_runtest_makereport(item, call):
                 except Exception as error:  # браузер уже недоступен — отчёт важнее вложения
                     allure.attach(str(error), name=f"{name}: вложение не снято")
     return report
+
+
+def _attach_traces(item, report) -> None:
+    """trace.zip, который pytest-playwright сохранил при закрытии контекста, — вложение «trace».
+
+    Путь pytest-playwright кладёт в user_properties отчёта teardown (относительно папки запуска).
+    Открыть: ``playwright show-trace <файл>`` или https://trace.playwright.dev.
+    """
+    for name, path in report.user_properties:
+        if name != "playwright_trace":
+            continue
+        trace = item.config.invocation_params.dir / path
+        try:
+            allure.attach.file(str(trace), name="trace", extension="zip")
+        except OSError as error:  # файл не дописан или удалён — отчёт важнее вложения
+            allure.attach(str(error), name="trace: вложение не снято")
